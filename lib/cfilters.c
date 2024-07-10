@@ -764,6 +764,10 @@ int Curl_socktype_for_transport(uint8_t transport)
     return SOCK_STREAM;
   case TRNSPRT_UNIX:
     return SOCK_STREAM;
+#ifdef USE_LINUX_QUIC
+  case TRNSPRT_QUIC:
+    return SOCK_STREAM;
+#endif
   default: /* UDP and QUIC */
     return SOCK_DGRAM;
   }
@@ -776,6 +780,10 @@ int Curl_protocol_for_transport(uint8_t transport)
     return IPPROTO_TCP;
   case TRNSPRT_UNIX:
     return IPPROTO_IP;
+#ifdef USE_LINUX_QUIC
+  case TRNSPRT_QUIC:
+    return IPPROTO_QUIC;
+#endif
   default: /* UDP and QUIC */
     return IPPROTO_UDP;
   }

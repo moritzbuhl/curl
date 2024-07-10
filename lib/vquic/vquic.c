@@ -43,6 +43,7 @@
 #include "cfilters.h"
 #include "vquic/curl_ngtcp2.h"
 #include "vquic/curl_quiche.h"
+#include "vquic/curl_linux.h"
 #include "multiif.h"
 #include "progress.h"
 #include "rand.h"
@@ -70,6 +71,8 @@ void Curl_quic_ver(char *p, size_t len)
   Curl_ngtcp2_ver(p, len);
 #elif defined(USE_QUICHE)
   Curl_quiche_ver(p, len);
+#elif defined(USE_LINUX_QUIC) && defined(USE_NGHTTP3)
+  Curl_linuxq_ver(p, len);
 #endif
 }
 
@@ -711,6 +714,8 @@ CURLcode Curl_cf_quic_create(struct Curl_cfilter **pcf,
   return Curl_cf_ngtcp2_create(pcf, data, conn, addr);
 #elif defined(USE_QUICHE)
   return Curl_cf_quiche_create(pcf, data, conn, addr);
+#elif defined(USE_LINUX_QUIC) && defined(USE_NGHTTP3)
+  return Curl_cf_linuxq_create(pcf, data, conn, addr);
 #else
   *pcf = NULL;
   (void)data;

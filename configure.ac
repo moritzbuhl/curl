@@ -3662,6 +3662,18 @@ if test "$USE_NGTCP2" = "1" && test "$USE_NGHTTP3" = "1"; then
 fi
 
 dnl **********************************************************************
+dnl Check for Linux QUIC and nghttp3 (HTTP/3 with nghttp3 using Linux QUIC)
+dnl **********************************************************************
+
+if test "$USE_LINUX_QUIC" = "1" && test "$USE_NGHTTP3" = "1"; then
+  experimental="$experimental HTTP3"
+  AC_DEFINE(USE_LINUX_QUIC_H3, 1, [if linux quic + nghttp3 is in use])
+  AC_SUBST(USE_LINUX_QUIC_H3, [1])
+  AC_MSG_NOTICE([HTTP3 support is experimental])
+  curl_h3_msg="enabled (linuxq + nghttp3)"
+fi
+
+dnl **********************************************************************
 dnl Check for quiche (QUIC)
 dnl **********************************************************************
 
@@ -5187,6 +5199,7 @@ fi
 
 if test "$USE_NGTCP2_H3" = "1" ||
    test "$USE_QUICHE" = "1" ||
+   test "$USE_LINUX_QUIC_H3" = "1"; then
    test "$USE_OPENSSL_H3" = "1"; then
   if test "$CURL_WITH_MULTI_SSL" = "1"; then
     AC_MSG_ERROR([MultiSSL cannot be enabled with HTTP/3 and vice versa])
