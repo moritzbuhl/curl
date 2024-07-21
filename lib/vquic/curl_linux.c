@@ -24,10 +24,39 @@
 
 #include "curl_setup.h"
 
-#if ! defined(USE_NGHTTP3)
-#error USE_LINUX_QUIC
-#endif
 #if defined(USE_LINUX_QUIC) && defined(USE_NGHTTP3)
+#include <nghttp3/nghttp3.h>
+
+#include "urldata.h"
+#include "hash.h"
+#include "sendf.h"
+#include "strdup.h"
+#include "rand.h"
+#include "multiif.h"
+#include "strcase.h"
+#include "cfilters.h"
+#include "cf-socket.h"
+#include "connect.h"
+#include "progress.h"
+#include "strerror.h"
+#include "dynbuf.h"
+#include "http1.h"
+#include "select.h"
+#include "inet_pton.h"
+#include "transfer.h"
+#include "vquic.h"
+#include "vquic_int.h"
+#include "vquic-tls.h"
+#include "vtls/keylog.h"
+#include "vtls/vtls.h"
+#include "curl_ngtcp2.h"
+
+#include "warnless.h"
+
+/* The last 3 #include files should be in this order */
+#include "curl_printf.h"
+#include "curl_memory.h"
+#include "memdebug.h"
 
 struct cf_linuxq_ctx {
   struct cf_quic_ctx q;
