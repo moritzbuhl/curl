@@ -28,10 +28,6 @@
 
 #if defined(USE_LINUX_QUIC) && defined(USE_NGHTTP3)
 
-struct Curl_cfilter;
-
-#include "urldata.h"
-
 void Curl_linuxq_ver(char *p, size_t len);
 
 CURLcode Curl_cf_linuxq_create(struct Curl_cfilter **pcf,
