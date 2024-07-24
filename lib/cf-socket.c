@@ -1956,7 +1956,6 @@ static CURLcode cf_quic_connect(struct Curl_cfilter *cf,
 
   *done = FALSE; /* a very negative world view is best */
   if(ctx->sock == CURL_SOCKET_BAD) {
-    int error;
 
     result = cf_socket_open(cf, data);
     if(result)
@@ -1970,12 +1969,11 @@ static CURLcode cf_quic_connect(struct Curl_cfilter *cf,
     /* Connect QUIC socket */
     rc = connect(ctx->sock, &ctx->addr.sa_addr,
                  (curl_socklen_t)ctx->addr.addrlen);
-    error = SOCKERRNO;
     set_local_ip(cf, data);
     CURL_TRC_CF(data, cf, "local address %s port %d...",
                 ctx->ip.local_ip, ctx->ip.local_port);
     if(rc == -1) {
-      result = socket_connect_result(data, ctx->ip.remote_ip, error);
+      result = socket_connect_result(data, ctx->ip.remote_ip, SOCKERRNO);
       goto out;
     }
   }

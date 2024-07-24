@@ -274,6 +274,12 @@ static void h3_drain_stream(struct Curl_cfilter *cf,
   }
 }
 
+struct pkt_io_ctx {
+  struct Curl_cfilter *cf;
+  struct Curl_easy *data;
+  size_t pkt_count;
+};
+
 static int cb_recv_stream_data(uint32_t flags, int64_t sid, const uint8_t *buf,
                                size_t buflen, void *user_data,
                                void *stream_user_data)
@@ -300,7 +306,7 @@ static int cb_recv_stream_data(uint32_t flags, int64_t sid, const uint8_t *buf,
                   "reset=%d, closed=%d",
                   stream_id, stream->reset, stream->closed);
     }
-    if (nconsumed ==  NGHTTP3_ERR_NOMEM)
+    if(nconsumed ==  NGHTTP3_ERR_NOMEM)
       return CURLE_OUT_OF_MEMORY;
     else
       return CURLE_HTTP3;
@@ -559,6 +565,8 @@ static CURLcode init_ngh3_conn(struct Curl_cfilter *cf)
   CURLcode result;
   int rc;
   int64_t ctrl_stream_id, qpack_enc_stream_id, qpack_dec_stream_id;
+  struct quic_stream_info sinfo;
+  socklen_t len = sizeof(sinfo);
 
   /*if(ngtcp2_conn_get_streams_uni_left(ctx->qconn) < 3) {
     return CURLE_QUIC_CONNECT_ERROR;
@@ -576,11 +584,15 @@ static CURLcode init_ngh3_conn(struct Curl_cfilter *cf)
     goto fail;
   }
 
-  //rc = ngtcp2_conn_open_uni_stream(ctx->qconn, &ctrl_stream_id, NULL);
-  if(rc) {
+  sinfo.stream_id = -1;
+  sinfo.flags = QUIC_STREAM_FLAG_UNI;
+  rc = getsockopt(ctx->q.sockfd, SOL_QUIC, QUIC_SOCKOPT_STREAM_OPEN, &sinfo,
+                  &len);
+  if(rc == -1) {
     result = CURLE_QUIC_CONNECT_ERROR;
     goto fail;
   }
+  ctrl_stream_id = sinfo.stream_id;
 
   rc = nghttp3_conn_bind_control_stream(ctx->h3conn, ctrl_stream_id);
   if(rc) {
@@ -588,17 +600,25 @@ static CURLcode init_ngh3_conn(struct Curl_cfilter *cf)
     goto fail;
   }
 
-  //rc = ngtcp2_conn_open_uni_stream(ctx->qconn, &qpack_enc_stream_id, NULL);
-  if(rc) {
+  sinfo.stream_id = -1;
+  sinfo.flags = QUIC_STREAM_FLAG_UNI;
+  rc = getsockopt(ctx->q.sockfd, SOL_QUIC, QUIC_SOCKOPT_STREAM_OPEN, &sinfo,
+                  &len);
+  if(rc == -1) {
     result = CURLE_QUIC_CONNECT_ERROR;
     goto fail;
   }
+  qpack_enc_stream_id = sinfo.stream_id;
 
-  //rc = ngtcp2_conn_open_uni_stream(ctx->qconn, &qpack_dec_stream_id, NULL);
-  if(rc) {
+  sinfo.stream_id = -1;
+  sinfo.flags = QUIC_STREAM_FLAG_UNI;
+  rc = getsockopt(ctx->q.sockfd, SOL_QUIC, QUIC_SOCKOPT_STREAM_OPEN, &sinfo,
+                  &len);
+  if(rc == -1) {
     result = CURLE_QUIC_CONNECT_ERROR;
     goto fail;
   }
+  qpack_dec_stream_id = sinfo.stream_id;
 
   rc = nghttp3_conn_bind_qpack_streams(ctx->h3conn, qpack_enc_stream_id,
                                        qpack_dec_stream_id);
@@ -652,7 +672,9 @@ static CURLcode cf_linuxq_shutdown(struct Curl_cfilter *cf,
   struct cf_linuxq_ctx *ctx = cf->ctx;
   struct cf_call_data save;
   struct pkt_io_ctx pktx;
+  struct quic_connection_close cclose;
   CURLcode result = CURLE_OK;
+  int rc;
 
   if(cf->shutdown || !ctx->qconn) {
     *done = TRUE;
@@ -665,7 +687,6 @@ static CURLcode cf_linuxq_shutdown(struct Curl_cfilter *cf,
 
   if(!ctx->shutdown_started) {
     char buffer[NGTCP2_MAX_UDP_PAYLOAD_SIZE];
-    ssize_t nwritten;
 
     if(!Curl_bufq_is_empty(&ctx->q.sendbuf)) {
       CURL_TRC_CF(data, cf, "shutdown, flushing sendbuf");
@@ -683,28 +704,15 @@ static CURLcode cf_linuxq_shutdown(struct Curl_cfilter *cf,
     }
 
     ctx->shutdown_started = TRUE;
-    //nwritten = ngtcp2_conn_write_connection_close(
-      //ctx->qconn, NULL, /* path */
-      //NULL, /* pkt_info */
-      //(uint8_t *)buffer, sizeof(buffer),
-      //&ctx->last_error, pktx.ts);
-/*
-    CURL_TRC_CF(data, cf, "start shutdown(err_type=%d, err_code=%"
-                CURL_PRIu64 ") -> %d", ctx->last_error.type,
-                (curl_uint64_t)ctx->last_error.error_code, (int)nwritten);
-*/
-    if(nwritten > 0) {
-      Curl_bufq_write(&ctx->q.sendbuf, (const unsigned char *)buffer,
-                      (size_t)nwritten, &result);
-      if(result) {
-        CURL_TRC_CF(data, cf, "error %d adding shutdown packets to sendbuf, "
-                    "aborting shutdown", result);
-        goto out;
-      }
-      ctx->q.no_gso = TRUE;
-      ctx->q.gsolen = (size_t)nwritten;
-      ctx->q.split_len = 0;
+    memset(&cclose, 0, sizeof(cclose));
+    rc = setsockopt(ctx->q.sockfd, SOL_QUIC, QUIC_SOCKOPT_CONNECTION_CLOSE,
+                    &cclose, sizeof(cclose));
+    if(rc == -1) {
+      result = CURLE_WRITE_ERROR;
+      goto out;
     }
+    CURL_TRC_CF(data, cf, "start shutdown(err_type=%hu, err_code=%"
+                CURL_PRIu32 ") -> %d", cclose.frame, cclose.errcode, rc);
   }
 
   if(!Curl_bufq_is_empty(&ctx->q.sendbuf)) {
@@ -793,94 +801,6 @@ static CURLcode cf_linuxq_data_event(struct Curl_cfilter *cf,
   default:
     break;
   }
-  CF_DATA_RESTORE(cf, save);
-  return result;
-}
-
-static CURLcode cf_linuxq_shutdown(struct Curl_cfilter *cf,
-                                   struct Curl_easy *data, bool *done)
-{
-  struct cf_linuxq_ctx *ctx = cf->ctx;
-  struct cf_call_data save;
-  struct pkt_io_ctx pktx;
-  CURLcode result = CURLE_OK;
-
-  if(cf->shutdown || !ctx->qconn) {
-    *done = TRUE;
-    return CURLE_OK;
-  }
-
-  CF_DATA_SAVE(save, cf, data);
-  *done = FALSE;
-  pktx_init(&pktx, cf, data);
-
-  if(!ctx->shutdown_started) {
-    char buffer[NGTCP2_MAX_UDP_PAYLOAD_SIZE];
-    ssize_t nwritten;
-
-    if(!Curl_bufq_is_empty(&ctx->q.sendbuf)) {
-      CURL_TRC_CF(data, cf, "shutdown, flushing sendbuf");
-      result = cf_progress_egress(cf, data, &pktx);
-      if(!Curl_bufq_is_empty(&ctx->q.sendbuf)) {
-        CURL_TRC_CF(data, cf, "sending shutdown packets blocked");
-        result = CURLE_OK;
-        goto out;
-      }
-      else if(result) {
-        CURL_TRC_CF(data, cf, "shutdown, error %d flushing sendbuf", result);
-        *done = TRUE;
-        goto out;
-      }
-    }
-
-    ctx->shutdown_started = TRUE;
-    //nwritten = ngtcp2_conn_write_connection_close(
-      //ctx->qconn, NULL, /* path */
-      //NULL, /* pkt_info */
-      //(uint8_t *)buffer, sizeof(buffer),
-      //&ctx->last_error, pktx.ts);
-/*
-    CURL_TRC_CF(data, cf, "start shutdown(err_type=%d, err_code=%"
-                CURL_PRIu64 ") -> %d", ctx->last_error.type,
-                (curl_uint64_t)ctx->last_error.error_code, (int)nwritten);
-*/
-    if(nwritten > 0) {
-      Curl_bufq_write(&ctx->q.sendbuf, (const unsigned char *)buffer,
-                      (size_t)nwritten, &result);
-      if(result) {
-        CURL_TRC_CF(data, cf, "error %d adding shutdown packets to sendbuf, "
-                    "aborting shutdown", result);
-        goto out;
-      }
-      ctx->q.no_gso = TRUE;
-      ctx->q.gsolen = (size_t)nwritten;
-      ctx->q.split_len = 0;
-    }
-  }
-
-  if(!Curl_bufq_is_empty(&ctx->q.sendbuf)) {
-    CURL_TRC_CF(data, cf, "shutdown, flushing egress");
-    result = vquic_flush(cf, data, &ctx->q);
-    if(result == CURLE_AGAIN) {
-      CURL_TRC_CF(data, cf, "sending shutdown packets blocked");
-      result = CURLE_OK;
-      goto out;
-    }
-    else if(result) {
-      CURL_TRC_CF(data, cf, "shutdown, error %d flushing sendbuf", result);
-      *done = TRUE;
-      goto out;
-    }
-  }
-
-  if(Curl_bufq_is_empty(&ctx->q.sendbuf)) {
-    /* Sent everything off. ngtcp2 seems to have no support for graceful
-     * shutdowns. So, we are done. */
-    CURL_TRC_CF(data, cf, "shutdown completely sent off, done");
-    *done = TRUE;
-    result = CURLE_OK;
-  }
-out:
   CF_DATA_RESTORE(cf, save);
   return result;
 }
@@ -1016,12 +936,12 @@ static CURLcode cf_linuxq_connect(struct Curl_cfilter *cf,
   }
 
 #ifdef USE_GNUTLS
-    if (quic_client_handshake(ctx->sock, NULL, NULL) != 0) {
-      result = socket_connect_result(data, ctx->ip.remote_ip, error); // XXX
+    if(quic_client_handshake(ctx->sock, NULL, NULL) != 0) {
+      result = CURLE_QUIC_CONNECT_ERROR;
       goto out;
     }
 #else
-#error unimpl
+#error quic_client_handshake only implemented for GNUTLS
 #endif
   result = cf_progress_ingress(cf, data, &pktx);
   if(result)
@@ -1358,6 +1278,228 @@ static CURLcode cf_progress_ingress(struct Curl_cfilter *cf,
   return result;
 }
 
+/**
+ * Read a network packet to send into `buf`.
+ * Return number of bytes written or -1 with *err set.
+ */
+static ssize_t read_pkt_to_send(void *userp,
+                                unsigned char *buf, size_t buflen,
+                                CURLcode *err)
+{
+  struct pkt_io_ctx *x = userp;
+  struct cf_linuxq_ctx *ctx = x->cf->ctx;
+  nghttp3_vec vec[16];
+  nghttp3_ssize veccnt;
+  ssize_t ndatalen;
+  uint32_t flags;
+  int64_t stream_id;
+  int fin;
+  ssize_t nwritten, n;
+  veccnt = 0;
+  stream_id = -1;
+  fin = 0;
+
+  nwritten = 0;
+  *err = CURLE_OK;
+  for(;;) {
+
+    if(ctx->h3conn && ngtcp2_conn_get_max_data_left(ctx->qconn)) {
+      veccnt = nghttp3_conn_writev_stream(ctx->h3conn, &stream_id, &fin, vec,
+                                          sizeof(vec) / sizeof(vec[0]));
+      if(veccnt < 0) {
+        failf(x->data, "nghttp3_conn_writev_stream returned error: %s",
+              nghttp3_strerror((int)veccnt));
+        cf_ngtcp2_h3_err_set(x->cf, x->data, (int)veccnt);
+        *err = CURLE_SEND_ERROR;
+        return -1;
+      }
+    }
+
+    flags = NGTCP2_WRITE_STREAM_FLAG_MORE |
+            (fin ? NGTCP2_WRITE_STREAM_FLAG_FIN : 0);
+    n = ngtcp2_conn_writev_stream(ctx->qconn, &x->ps.path,
+                                  NULL, buf, buflen,
+                                  &ndatalen, flags, stream_id,
+                                  (const ngtcp2_vec *)vec, veccnt, x->ts);
+    if(n == 0) {
+      /* nothing to send */
+      *err = CURLE_AGAIN;
+      nwritten = -1;
+      goto out;
+    }
+    else if(n < 0) {
+      switch(n) {
+      case NGTCP2_ERR_STREAM_DATA_BLOCKED: {
+        struct h3_stream_ctx *stream = H3_STREAM_CTX(ctx, x->data);
+        DEBUGASSERT(ndatalen == -1);
+        nghttp3_conn_block_stream(ctx->h3conn, stream_id);
+        CURL_TRC_CF(x->data, x->cf, "[%" CURL_PRId64 "] block quic flow",
+                    (curl_int64_t)stream_id);
+        DEBUGASSERT(stream);
+        if(stream)
+          stream->quic_flow_blocked = TRUE;
+        n = 0;
+        break;
+      }
+      case NGTCP2_ERR_STREAM_SHUT_WR:
+        DEBUGASSERT(ndatalen == -1);
+        nghttp3_conn_shutdown_stream_write(ctx->h3conn, stream_id);
+        n = 0;
+        break;
+      case NGTCP2_ERR_WRITE_MORE:
+        /* ngtcp2 wants to send more. update the flow of the stream whose data
+         * is in the buffer and continue */
+        DEBUGASSERT(ndatalen >= 0);
+        n = 0;
+        break;
+      default:
+        DEBUGASSERT(ndatalen == -1);
+        failf(x->data, "ngtcp2_conn_writev_stream returned error: %s",
+              ngtcp2_strerror((int)n));
+        cf_ngtcp2_err_set(x->cf, x->data, (int)n);
+        *err = CURLE_SEND_ERROR;
+        nwritten = -1;
+        goto out;
+      }
+    }
+
+    if(ndatalen >= 0) {
+      /* we add the amount of data bytes to the flow windows */
+      int rv = nghttp3_conn_add_write_offset(ctx->h3conn, stream_id, ndatalen);
+      if(rv) {
+        failf(x->data, "nghttp3_conn_add_write_offset returned error: %s\n",
+              nghttp3_strerror(rv));
+        return CURLE_SEND_ERROR;
+      }
+    }
+
+    if(n > 0) {
+      /* packet assembled, leave */
+      nwritten = n;
+      goto out;
+    }
+  }
+out:
+  return nwritten;
+}
+
+static CURLcode cf_progress_egress(struct Curl_cfilter *cf,
+                                   struct Curl_easy *data,
+                                   struct pkt_io_ctx *pktx)
+{
+  struct cf_ngtcp2_ctx *ctx = cf->ctx;
+  ssize_t nread;
+  size_t max_payload_size, path_max_payload_size, max_pktcnt;
+  size_t pktcnt = 0;
+  size_t gsolen = 0;  /* this disables gso until we have a clue */
+  CURLcode curlcode;
+  struct pkt_io_ctx local_pktx;
+  struct quic_transport_param param = {};
+  socklen_t param_len = sizeof(param);
+  int rc;
+
+  if(!pktx) {
+    pktx_init(&local_pktx, cf, data);
+    pktx = &local_pktx;
+  }
+  else {
+    pktx_update_time(pktx, cf);
+  }
+
+  curlcode = vquic_flush(cf, data, &ctx->q);
+  if(curlcode) {
+    if(curlcode == CURLE_AGAIN) {
+      Curl_expire(data, 1, EXPIRE_QUIC);
+      return CURLE_OK;
+    }
+    return curlcode;
+  }
+
+  /* In UDP, there is a maximum theoretical packet paload length and
+   * a minimum payload length that is "guaranteed" to work.
+   * To detect if this minimum payload can be increased, ngtcp2 sends
+   * now and then a packet payload larger than the minimum. It that
+   * is ACKed by the peer, both parties know that it works and
+   * the subsequent packets can use a larger one.
+   * This is called PMTUD (Path Maximum Transmission Unit Discovery).
+   * Since a PMTUD might be rejected right on send, we do not want it
+   * be followed by other packets of lesser size. Because those would
+   * also fail then. So, if we detect a PMTUD while buffering, we flush.
+   */
+  rc = getsockopt(sockfd, SOL_QUIC, QUIC_SOCKOPT_TRANSPORT_PARAM, &param,
+                  &param_len);
+  if(rc == -1)
+    return CURLE_SEND_ERROR;
+
+  max_payload_size = param.max_udp_payload_size;
+  path_max_payload_size = param.max_udp_payload_size;
+  /* maximum number of packets buffered before we flush to the socket */
+  max_pktcnt = ctx->q.sendbuf.chunk_size / max_payload_size;
+
+  for(;;) {
+    /* add the next packet to send, if any, to our buffer */
+    nread = Curl_bufq_sipn(&ctx->q.sendbuf, max_payload_size,
+                           read_pkt_to_send, pktx, &curlcode);
+    if(nread < 0) {
+      if(curlcode != CURLE_AGAIN)
+        return curlcode;
+      /* Nothing more to add, flush and leave */
+      curlcode = vquic_send(cf, data, &ctx->q, gsolen);
+      if(curlcode) {
+        if(curlcode == CURLE_AGAIN) {
+          Curl_expire(data, 1, EXPIRE_QUIC);
+          return CURLE_OK;
+        }
+        return curlcode;
+      }
+      goto out;
+    }
+
+    DEBUGASSERT(nread > 0);
+    if(pktcnt == 0) {
+      /* first packet in buffer. This is either of a known, "good"
+       * payload size or it is a PMTUD. We will see. */
+      gsolen = (size_t)nread;
+    }
+    else if((size_t)nread > gsolen ||
+            (gsolen > path_max_payload_size && (size_t)nread != gsolen)) {
+      /* The just added packet is a PMTUD *or* the one(s) before the
+       * just added were PMTUD and the last one is smaller.
+       * Flush the buffer before the last add. */
+      curlcode = vquic_send_tail_split(cf, data, &ctx->q,
+                                       gsolen, nread, nread);
+      if(curlcode) {
+        if(curlcode == CURLE_AGAIN) {
+          Curl_expire(data, 1, EXPIRE_QUIC);
+          return CURLE_OK;
+        }
+        return curlcode;
+      }
+      pktcnt = 0;
+      continue;
+    }
+
+    if(++pktcnt >= max_pktcnt || (size_t)nread < gsolen) {
+      /* Reached MAX_PKT_BURST *or*
+       * the capacity of our buffer *or*
+       * last add was shorter than the previous ones, flush */
+      curlcode = vquic_send(cf, data, &ctx->q, gsolen);
+      if(curlcode) {
+        if(curlcode == CURLE_AGAIN) {
+          Curl_expire(data, 1, EXPIRE_QUIC);
+          return CURLE_OK;
+        }
+        return curlcode;
+      }
+      /* pktbuf has been completely sent */
+      pktcnt = 0;
+    }
+  }
+
+out:
+  return CURLE_OK;
+}
+
 static CURLcode cf_linuxq_query(struct Curl_cfilter *cf,
                                 struct Curl_easy *data,
                                 int query, int *pres1, void *pres2)
@@ -1488,9 +1630,9 @@ struct Curl_cftype Curl_cft_http3 = {
   cf_linuxq_send,
   cf_linuxq_recv,
   cf_linuxq_data_event,
-  cf_ngtcp2_conn_is_alive,
+  cf_linuxq_conn_is_alive,
   Curl_cf_def_conn_keep_alive,
-  cf_ngtcp2_query,
+  cf_linuxq_query,
 };
 
 CURLcode Curl_cf_linuxq_create(struct Curl_cfilter **pcf,
