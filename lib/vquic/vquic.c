@@ -42,6 +42,9 @@
 #ifdef HAVE_FCNTL_H
 #include <fcntl.h>
 #endif
+#ifdef USE_LINUX_QUIC
+#include <linux/quic.h>
+#endif
 #include "urldata.h"
 #include "bufq.h"
 #include "dynbuf.h"
@@ -375,7 +378,11 @@ static CURLcode recvmmsg_packets(struct Curl_cfilter *cf,
 #define MMSG_NUM  64
   struct iovec msg_iov[MMSG_NUM];
   struct mmsghdr mmsg[MMSG_NUM];
+#ifdef USE_LINUX_QUIC
+  uint8_t msg_ctrl[MMSG_NUM * CMSG_SPACE(sizeof(struct quic_stream_info))];
+#else
   uint8_t msg_ctrl[MMSG_NUM * CMSG_SPACE(sizeof(uint16_t))];
+#endif
   uint8_t bufs[MMSG_NUM][2*1024];
   struct sockaddr_storage remote_addr[MMSG_NUM];
   size_t total_nread, pkts;
@@ -400,7 +407,11 @@ static CURLcode recvmmsg_packets(struct Curl_cfilter *cf,
       mmsg[i].msg_hdr.msg_name = &remote_addr[i];
       mmsg[i].msg_hdr.msg_namelen = sizeof(remote_addr[i]);
       mmsg[i].msg_hdr.msg_control = &msg_ctrl[i];
+#ifdef USE_LINUX_QUIC
+      mmsg[i].msg_hdr.msg_controllen = CMSG_SPACE(sizeof(struct quic_stream_info));
+#else
       mmsg[i].msg_hdr.msg_controllen = CMSG_SPACE(sizeof(uint16_t));
+#endif
     }
 
     while((mcount = recvmmsg(qctx->sockfd, mmsg, n, 0, NULL)) == -1 &&
@@ -446,8 +457,14 @@ static CURLcode recvmmsg_packets(struct Curl_cfilter *cf,
           pktlen = gso_size;
         }
 
-        result = recv_cb(bufs[i] + offset, pktlen, mmsg[i].msg_hdr.msg_name,
-                         mmsg[i].msg_hdr.msg_namelen, 0, userp);
+        result = recv_cb(bufs[i] + offset, pktlen,
+#ifdef USE_LINUX_QUIC
+                         mmsg[i].msg_hdr, cf, data,
+#else
+                         mmsg[i].msg_hdr.msg_name,
+                         mmsg[i].msg_hdr.msg_namelen, 0,
+#endif
+                         userp);
         if(result)
           goto out;
       }

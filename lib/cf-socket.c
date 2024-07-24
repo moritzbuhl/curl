@@ -1978,14 +1978,6 @@ static CURLcode cf_quic_connect(struct Curl_cfilter *cf,
       result = socket_connect_result(data, ctx->ip.remote_ip, error);
       goto out;
     }
-#ifdef USE_GNUTLS
-    if (quic_client_handshake(ctx->sock, NULL, NULL) != 0) {
-      result = socket_connect_result(data, ctx->ip.remote_ip, error); // XXX
-      goto out;
-    }
-#else
-#error unimpl
-#endif
   }
 
   /* check socket for connect */
