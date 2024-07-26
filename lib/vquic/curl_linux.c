@@ -79,6 +79,14 @@
  * chunk size and window size */
 #define H3_STREAM_SEND_CHUNKS \
           (H3_STREAM_WINDOW_SIZE / H3_STREAM_CHUNK_SIZE)
+/*
+ * Store linuxq version info in this buffer.
+ */
+void Curl_linuxq_ver(char *p, size_t len)
+{
+  const nghttp3_info *ht3 = nghttp3_version(0);
+  (void)msnprintf(p, len, "linuxq nghttp3/%s", ht3->version_str);
+}
 
 struct cf_linuxq_ctx {
   struct cf_quic_ctx q;
@@ -91,7 +99,8 @@ struct cf_linuxq_ctx {
 #endif
   uint32_t version;
   uint32_t last_error;
-  struct quic_handshake_parms transport_params;
+  struct quic_transport_param transport_params;
+  struct quic_handshake_parms handshake_params;
   struct cf_call_data call_data;
   nghttp3_conn *h3conn;
   nghttp3_settings h3settings;
@@ -100,7 +109,6 @@ struct cf_linuxq_ctx {
   struct curltime reconnect_at;      /* time the next attempt should start */
   struct dynbuf scratch;             /* temp buffer for header construction */
   struct Curl_hash streams;          /* hash `data->id` to `h3_stream_ctx` */
-  uint64_t max_idle_ms;              /* max idle time for QUIC connection */
   uint64_t used_bidi_streams;        /* bidi streams we have opened */
   uint64_t max_bidi_streams;         /* max bidi streams we can open */
   BIT(shutdown_started);             /* queued shutdown packets */
@@ -827,16 +835,30 @@ static CURLcode cf_connect_start(struct Curl_cfilter *cf,
                                  struct Curl_easy *data)
 {
   struct cf_linuxq_ctx *ctx = cf->ctx;
+  socklen_t len = sizeof(struct quic_transport_param);
   CURLcode result;
+  int rc;
 
   ctx->version = QUIC_VERSION_V1;
-  ctx->max_idle_ms = CURL_QUIC_MAX_IDLE_MS;
   Curl_dyn_init(&ctx->scratch, CURL_MAX_HTTP_HEADER);
   Curl_hash_offt_init(&ctx->streams, 63, h3_stream_hash_free);
 
   result = Curl_ssl_peer_init(&ctx->peer, cf, TRNSPRT_QUIC);
   if(result)
     return result;
+
+  /* get the default local transport params XXX: does this work? */
+  rc = getsockopt(ctx->q.sockfd, SOL_QUIC, QUIC_SOCKOPT_TRANSPORT_PARAM,
+                  &ctx->transport_params, &len);
+  if(rc == -1)
+    return CURLE_FAILED_INIT;
+
+  ctx->transport_params.max_idle_timeout = CURL_QUIC_MAX_IDLE_MS * 1000;
+
+  rc = setsockopt(ctx->q.sockfd, SOL_QUIC, QUIC_SOCKOPT_TRANSPORT_PARAM,
+                  &ctx->transport_params, len);
+  if(rc == -1)
+    return CURLE_FAILED_INIT;
 
 #define H3_ALPN "\x2h3\x5h3-29"
 #if 0
@@ -853,9 +875,9 @@ static CURLcode cf_connect_start(struct Curl_cfilter *cf,
   if(result)
     return result;
 
-  ctx->transport_params.timeout = 15000;
 #if 0
-  ctx->qconn = quic_conn_create(ctx->q.sockfd, &ctx->transport_params)
+  ctx->handshake_params.timeout = 15000;
+  ctx->qconn = quic_conn_create(ctx->q.sockfd, &ctx->handshake_params)
   if(!ctx->qconn) == NULL)
     return errno;
 #else
@@ -1615,8 +1637,12 @@ static bool cf_linuxq_conn_is_alive(struct Curl_cfilter *cf,
 {
   struct cf_linuxq_ctx *ctx = cf->ctx;
   bool alive = FALSE;
-  //const ngtcp2_transport_params *rp;
   struct cf_call_data save;
+  timediff_t idletime;
+  uint64_t idle_ms;
+  struct quic_transport_param rp = {0};
+  socklen_t len = sizeof(struct quic_transport_param);
+  int rc;
 
   CF_DATA_SAVE(save, cf, data);
   *input_pending = FALSE;
@@ -1628,20 +1654,20 @@ static bool cf_linuxq_conn_is_alive(struct Curl_cfilter *cf,
    * we exceed this, regard the connection as dead. The other side
    * may have completely purged it and will no longer respond
    * to any packets from us. */
-/*
-  rp = ngtcp2_conn_get_remote_transport_params(ctx->qconn);
-  if(rp) {
-    timediff_t idletime;
-    uint64_t idle_ms = ctx->max_idle_ms;
+  rp.remote = 1;
+  rc = getsockopt(ctx->q.sockfd, SOL_QUIC, QUIC_SOCKOPT_TRANSPORT_PARAM, &rp,
+                  &len);
+  if(rc == -1)
+    goto out;
 
-    if(rp->max_idle_timeout &&
-      (rp->max_idle_timeout / NGTCP2_MILLISECONDS) < idle_ms)
-      idle_ms = (rp->max_idle_timeout / NGTCP2_MILLISECONDS);
-    idletime = Curl_timediff(Curl_now(), ctx->q.last_io);
-    if(idletime > 0 && (uint64_t)idletime > idle_ms)
-      goto out;
-  }
-*/
+  idle_ms = ctx->transport_params.max_idle_timeout;
+  if(rp.max_idle_timeout && rp.max_idle_timeout < idle_ms)
+    idle_ms = rp.max_idle_timeout;
+  idle_ms /= 1000;
+
+  idletime = Curl_timediff(Curl_now(), ctx->q.last_io);
+  if(idletime > 0 && (uint64_t)idletime > idle_ms)
+    goto out;
 
   if(!cf->next || !cf->next->cft->is_alive(cf->next, data, input_pending))
     goto out;

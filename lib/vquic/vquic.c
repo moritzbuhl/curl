@@ -493,7 +493,11 @@ static CURLcode recvmsg_packets(struct Curl_cfilter *cf,
   ssize_t nread;
   char errstr[STRERROR_LEN];
   CURLcode result = CURLE_OK;
+#ifdef USE_LINUX_QUIC
+  uint8_t msg_ctrl[CMSG_SPACE(sizeof(struct quic_stream_info))];
+#else
   uint8_t msg_ctrl[CMSG_SPACE(sizeof(uint16_t))];
+#endif
   size_t gso_size;
   size_t pktlen;
   size_t offset, to;
@@ -552,7 +556,14 @@ static CURLcode recvmsg_packets(struct Curl_cfilter *cf,
       }
 
       result =
-        recv_cb(buf + offset, pktlen, msg.msg_name, msg.msg_namelen, 0, userp);
+        recv_cb(buf + offset, pktlen,
+#ifdef USE_LINUX_QUIC
+                         &msg, cf, data,
+#else
+                         msg.msg_name, msg.msg_name_len, 0,
+#endif
+                         userp);
+        if(result)
       if(result)
         goto out;
     }
@@ -729,7 +740,7 @@ bool Curl_conn_is_http3(const struct Curl_easy *data,
 #elif defined(USE_OPENSSL_QUIC) && defined(USE_NGHTTP3)
   return Curl_conn_is_osslq(data, conn, sockindex);
 #elif defined(USE_LINUX_QUIC) && defined(USE_NGHTTP3)
-  return Curl_conn_is_linuxq(pcf, data, conn, ai);
+  return Curl_conn_is_linuxq(data, conn, sockindex);
 #elif defined(USE_QUICHE)
   return Curl_conn_is_quiche(data, conn, sockindex);
 #elif defined(USE_MSH3)
