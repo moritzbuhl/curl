@@ -704,7 +704,6 @@ CURLcode Curl_qlogdir(struct Curl_easy *data,
   return CURLE_OK;
 }
 
-#ifndef HAVE_NETINET_QUIC_H
 CURLcode Curl_cf_quic_create(struct Curl_cfilter **pcf,
                              struct Curl_easy *data,
                              struct connectdata *conn,
@@ -717,6 +716,8 @@ CURLcode Curl_cf_quic_create(struct Curl_cfilter **pcf,
   return Curl_cf_ngtcp2_create(pcf, data, conn, ai);
 #elif defined(USE_OPENSSL_QUIC) && defined(USE_NGHTTP3)
   return Curl_cf_osslq_create(pcf, data, conn, ai);
+#elif defined(USE_LINUX_QUIC) && defined(USE_NGHTTP3)
+  return Curl_cf_linuxq_create(pcf, data, conn, ai);
 #elif defined(USE_QUICHE)
   return Curl_cf_quiche_create(pcf, data, conn, ai);
 #elif defined(USE_MSH3)
@@ -729,7 +730,6 @@ CURLcode Curl_cf_quic_create(struct Curl_cfilter **pcf,
   return CURLE_NOT_BUILT_IN;
 #endif
 }
-#endif
 
 bool Curl_conn_is_http3(const struct Curl_easy *data,
                         const struct connectdata *conn,

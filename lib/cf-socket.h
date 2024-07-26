@@ -112,7 +112,7 @@ CURLcode Curl_cf_tcp_create(struct Curl_cfilter **pcf,
                             const struct Curl_addrinfo *ai,
                             int transport);
 
-#ifdef HAVE_NETINET_QUIC_H
+#ifdef USE_LINUX_QUIC
 /**
  * Creates a cfilter that opens a QUIC socket to the given address
  * when calling its `connect` implementation.
@@ -120,11 +120,11 @@ CURLcode Curl_cf_tcp_create(struct Curl_cfilter **pcf,
  * used in happy eyeballing. Once selected for use, its `_active()`
  * method needs to be called.
  */
-CURLcode Curl_cf_quic_create(struct Curl_cfilter **pcf,
-                             struct Curl_easy *data,
-                             struct connectdata *conn,
-                             const struct Curl_addrinfo *ai,
-                             int transport);
+CURLcode Curl_cf_quic_sock_create(struct Curl_cfilter **pcf,
+                                  struct Curl_easy *data,
+                                  struct connectdata *conn,
+                                  const struct Curl_addrinfo *ai,
+                                  int transport);
 #endif
 
 /**

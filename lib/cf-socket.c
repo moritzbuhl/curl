@@ -323,7 +323,7 @@ void Curl_sock_assign_addr(struct Curl_sockaddr_ex *dest,
     dest->socktype = SOCK_STREAM;
     dest->protocol = IPPROTO_TCP;
     break;
-#ifdef HAVE_NETINET_QUIC_H
+#ifdef USE_LINUX_QUIC
   case TRNSPRT_QUIC:
     dest->socktype = SOCK_STREAM;
     dest->protocol = IPPROTO_QUIC;
@@ -1145,10 +1145,15 @@ static CURLcode cf_socket_open(struct Curl_cfilter *cf,
 #ifdef USE_IPV6
   is_tcp = (ctx->addr.family == AF_INET
             || ctx->addr.family == AF_INET6) &&
-           ctx->addr.socktype == SOCK_STREAM;
+           ctx->addr.socktype == SOCK_STREAM
 #else
   is_tcp = (ctx->addr.family == AF_INET) &&
-           ctx->addr.socktype == SOCK_STREAM;
+           ctx->addr.socktype == SOCK_STREAM
+#endif
+#ifdef USE_LINUX_QUIC
+           && ctx->addr.protocol != IPPROTO_QUIC;
+#else
+           ;
 #endif
   if(is_tcp && data->set.tcp_nodelay)
     tcpnodelay(data, ctx->sock);
@@ -1935,7 +1940,7 @@ out:
   return result;
 }
 
-#ifdef HAVE_NETINET_QUIC_H
+#ifdef USE_LINUX_QUIC
 static CURLcode cf_quic_connect(struct Curl_cfilter *cf,
                                 struct Curl_easy *data,
                                 bool blocking, bool *done)
@@ -2045,11 +2050,11 @@ struct Curl_cftype Curl_cft_quic = {
   cf_socket_query,
 };
 
-CURLcode Curl_cf_quic_create(struct Curl_cfilter **pcf,
-                             struct Curl_easy *data,
-                             struct connectdata *conn,
-                             const struct Curl_addrinfo *ai,
-                             int transport)
+CURLcode Curl_cf_quic_sock_create(struct Curl_cfilter **pcf,
+                                  struct Curl_easy *data,
+                                  struct connectdata *conn,
+                                  const struct Curl_addrinfo *ai,
+                                  int transport)
 {
   struct cf_socket_ctx *ctx = NULL;
   struct Curl_cfilter *cf = NULL;
@@ -2271,6 +2276,7 @@ CURLcode Curl_conn_tcp_accepted_set(struct Curl_easy *data,
 static bool cf_is_socket(struct Curl_cfilter *cf)
 {
   return cf && (cf->cft == &Curl_cft_tcp ||
+                cf->cft == &Curl_cft_quic ||
                 cf->cft == &Curl_cft_udp ||
                 cf->cft == &Curl_cft_unix ||
                 cf->cft == &Curl_cft_tcp_accept);

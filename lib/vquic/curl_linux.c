@@ -837,28 +837,17 @@ static CURLcode cf_connect_start(struct Curl_cfilter *cf,
   struct cf_linuxq_ctx *ctx = cf->ctx;
   socklen_t len = sizeof(struct quic_transport_param);
   CURLcode result;
+  const struct Curl_sockaddr_ex *sockaddr = NULL;
   int rc;
 
-  ctx->version = QUIC_VERSION_V1;
   Curl_dyn_init(&ctx->scratch, CURL_MAX_HTTP_HEADER);
   Curl_hash_offt_init(&ctx->streams, 63, h3_stream_hash_free);
 
+/*
   result = Curl_ssl_peer_init(&ctx->peer, cf, TRNSPRT_QUIC);
   if(result)
     return result;
-
-  /* get the default local transport params XXX: does this work? */
-  rc = getsockopt(ctx->q.sockfd, SOL_QUIC, QUIC_SOCKOPT_TRANSPORT_PARAM,
-                  &ctx->transport_params, &len);
-  if(rc == -1)
-    return CURLE_FAILED_INIT;
-
-  ctx->transport_params.max_idle_timeout = CURL_QUIC_MAX_IDLE_MS * 1000;
-
-  rc = setsockopt(ctx->q.sockfd, SOL_QUIC, QUIC_SOCKOPT_TRANSPORT_PARAM,
-                  &ctx->transport_params, len);
-  if(rc == -1)
-    return CURLE_FAILED_INIT;
+*/
 
 #define H3_ALPN "\x2h3\x5h3-29"
 #if 0
@@ -874,6 +863,16 @@ static CURLcode cf_connect_start(struct Curl_cfilter *cf,
   result = vquic_ctx_init(&ctx->q);
   if(result)
     return result;
+
+  Curl_cf_socket_peek(cf->next, data, &ctx->q.sockfd, &sockaddr, NULL);
+  if(!sockaddr)
+    return CURLE_QUIC_CONNECT_ERROR;
+
+
+  rc = getsockopt(ctx->q.sockfd, SOL_QUIC, QUIC_SOCKOPT_TRANSPORT_PARAM,
+                  &ctx->transport_params, &len);
+  if(rc == -1)
+    return CURLE_FAILED_INIT;
 
 #if 0
   ctx->handshake_params.timeout = 15000;
@@ -908,15 +907,10 @@ static CURLcode cf_linuxq_connect(struct Curl_cfilter *cf,
   if(!cf->next->connected) {
     result = Curl_conn_cf_connect(cf->next, data, blocking, done);
     if(result || !*done)
+{
       return result;
+}
   }
-
-  eopt.type = QUIC_EVENT_CONNECTION_CLOSE;
-  eopt.on = 1;
-  rc = setsockopt(ctx->q.sockfd, SOL_QUIC, QUIC_SOCKOPT_EVENT, &eopt,
-                  sizeof(eopt));
-  if(rc == -1)
-    return CURLE_QUIC_CONNECT_ERROR;
 
   *done = FALSE;
   now = Curl_now();
@@ -935,9 +929,6 @@ static CURLcode cf_linuxq_connect(struct Curl_cfilter *cf,
     result = cf_connect_start(cf, data);
     if(result)
       goto out;
-    result = cf_progress_egress(cf, data);
-    /* we do not expect to be able to recv anything yet */
-    goto out;
   }
 
 #ifdef USE_GNUTLS
@@ -951,6 +942,20 @@ static CURLcode cf_linuxq_connect(struct Curl_cfilter *cf,
   ctx->handshake_at = now;
   CURL_TRC_CF(data, cf, "handshake complete after %dms",
              (int)Curl_timediff(now, ctx->started_at));
+
+  ctx->transport_params.max_idle_timeout = CURL_QUIC_MAX_IDLE_MS * 1000;
+  ctx->transport_params.plpmtud_probe_timeout = 3000000;
+  rc = setsockopt(ctx->q.sockfd, SOL_QUIC, QUIC_SOCKOPT_TRANSPORT_PARAM,
+                  &ctx->transport_params, sizeof(struct quic_transport_param));
+  if(rc == -1)
+    return CURLE_FAILED_INIT;
+
+  eopt.type = QUIC_EVENT_CONNECTION_CLOSE;
+  eopt.on = 1;
+  rc = setsockopt(ctx->q.sockfd, SOL_QUIC, QUIC_SOCKOPT_EVENT, &eopt,
+                  sizeof(eopt));
+  if(rc == -1)
+    return CURLE_QUIC_CONNECT_ERROR;
 
   if(init_ngh3_conn(cf) != CURLE_OK) {
     result = CURLE_QUIC_CONNECT_ERROR;
@@ -1729,7 +1734,7 @@ CURLcode Curl_cf_linuxq_create(struct Curl_cfilter **pcf,
   if(result)
     goto out;
 
-  result = Curl_cf_quic_create(&quic_cf, data, conn, ai, TRNSPRT_QUIC);
+  result = Curl_cf_quic_sock_create(&quic_cf, data, conn, ai, TRNSPRT_QUIC);
   if(result)
     goto out;
 
