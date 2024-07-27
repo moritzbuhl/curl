@@ -868,14 +868,20 @@ static CURLcode cf_connect_start(struct Curl_cfilter *cf,
   if(!sockaddr)
     return CURLE_QUIC_CONNECT_ERROR;
 
+  rc = setsockopt(ctx->q.sockfd, SOL_QUIC, QUIC_SOCKOPT_ALPN, "h3, h3-29",
+                  sizeof("h3, h3-29"));
+  if(rc == -1)
+    return CURLE_QUIC_CONNECT_ERROR;
 
   rc = getsockopt(ctx->q.sockfd, SOL_QUIC, QUIC_SOCKOPT_TRANSPORT_PARAM,
                   &ctx->transport_params, &len);
   if(rc == -1)
     return CURLE_FAILED_INIT;
 
-#if 0
   ctx->handshake_params.timeout = 15000;
+  ctx->handshake_params.peername = cf->conn->host.name; // XXX
+
+#if 0
   ctx->qconn = quic_conn_create(ctx->q.sockfd, &ctx->handshake_params)
   if(!ctx->qconn) == NULL)
     return errno;
@@ -932,7 +938,8 @@ static CURLcode cf_linuxq_connect(struct Curl_cfilter *cf,
   }
 
 #ifdef USE_GNUTLS
-    if(quic_client_handshake(ctx->q.sockfd, NULL, NULL) != 0) {
+    rc = quic_client_handshake_parms(ctx->q.sockfd, &ctx->handshake_params);
+    if(rc != 0) {
       result = CURLE_QUIC_CONNECT_ERROR;
       goto out;
     }
