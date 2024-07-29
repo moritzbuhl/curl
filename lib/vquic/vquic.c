@@ -488,7 +488,6 @@ static CURLcode recvmsg_packets(struct Curl_cfilter *cf,
   struct iovec msg_iov;
   struct msghdr msg;
   uint8_t buf[64*1024];
-  struct sockaddr_storage remote_addr;
   size_t total_nread, pkts;
   ssize_t nread;
   char errstr[STRERROR_LEN];
@@ -497,10 +496,11 @@ static CURLcode recvmsg_packets(struct Curl_cfilter *cf,
   uint8_t msg_ctrl[CMSG_SPACE(sizeof(struct quic_stream_info))];
 #else
   uint8_t msg_ctrl[CMSG_SPACE(sizeof(uint16_t))];
-#endif
+  struct sockaddr_storage remote_addr;
   size_t gso_size;
-  size_t pktlen;
-  size_t offset, to;
+  size_t pktlen, to;
+  size_t offset;
+#endif
 
   msg_iov.iov_base = buf;
   msg_iov.iov_len = (int)sizeof(buf);
@@ -509,15 +509,18 @@ static CURLcode recvmsg_packets(struct Curl_cfilter *cf,
   msg.msg_iov = &msg_iov;
   msg.msg_iovlen = 1;
   msg.msg_control = msg_ctrl;
+  msg.msg_controllen = sizeof(msg_ctrl);
 
   DEBUGASSERT(max_pkts > 0);
   for(pkts = 0, total_nread = 0; pkts < max_pkts;) {
+#if 0
     msg.msg_name = &remote_addr;
     msg.msg_namelen = sizeof(remote_addr);
-    msg.msg_controllen = sizeof(msg_ctrl);
+#endif
     while((nread = recvmsg(qctx->sockfd, &msg, 0)) == -1 &&
           SOCKERRNO == EINTR)
       ;
+infof(data, "call to recvmsg");
     if(nread == -1) {
       if(SOCKERRNO == EAGAIN || SOCKERRNO == EWOULDBLOCK) {
         goto out;
@@ -539,6 +542,14 @@ static CURLcode recvmsg_packets(struct Curl_cfilter *cf,
 
     total_nread += (size_t)nread;
 
+      if(result)
+        goto out;
+#ifdef USE_LINUX_QUIC
+      result =
+        recv_cb(buf, nread, &msg, cf, data, userp);
+      if(result)
+        goto out;
+#else
     gso_size = msghdr_get_udp_gro(&msg);
     if(gso_size == 0) {
       gso_size = (size_t)nread;
@@ -557,16 +568,12 @@ static CURLcode recvmsg_packets(struct Curl_cfilter *cf,
 
       result =
         recv_cb(buf + offset, pktlen,
-#ifdef USE_LINUX_QUIC
-                         &msg, cf, data,
-#else
                          msg.msg_name, msg.msg_name_len, 0,
-#endif
                          userp);
-        if(result)
       if(result)
         goto out;
     }
+#endif
   }
 
 out:

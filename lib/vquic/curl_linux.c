@@ -112,7 +112,6 @@ struct cf_linuxq_ctx {
   uint64_t used_bidi_streams;        /* bidi streams we have opened */
   uint64_t max_bidi_streams;         /* max bidi streams we can open */
   BIT(shutdown_started);             /* queued shutdown packets */
-  BIT(connection_close);             /* received connection close frame*/
 };
 
 /* How to access `call_data` from a cf_linuxq filter */
@@ -592,7 +591,8 @@ static CURLcode init_ngh3_conn(struct Curl_cfilter *cf)
     goto fail;
   }
 
-  sinfo.stream_id = 0;
+printf("calling stream open\n");
+  sinfo.stream_id = -1;
   sinfo.stream_flag = QUIC_STREAM_FLAG_UNI;
   rc = getsockopt(ctx->q.sockfd, SOL_QUIC, QUIC_SOCKOPT_STREAM_OPEN, &sinfo,
                   &len);
@@ -608,7 +608,8 @@ static CURLcode init_ngh3_conn(struct Curl_cfilter *cf)
     goto fail;
   }
 
-  sinfo.stream_id = 0;
+printf("calling stream open\n");
+  sinfo.stream_id = -1;
   sinfo.stream_flag = QUIC_STREAM_FLAG_UNI;
   rc = getsockopt(ctx->q.sockfd, SOL_QUIC, QUIC_SOCKOPT_STREAM_OPEN, &sinfo,
                   &len);
@@ -618,7 +619,8 @@ static CURLcode init_ngh3_conn(struct Curl_cfilter *cf)
   }
   qpack_enc_stream_id = sinfo.stream_id;
 
-  sinfo.stream_id = 0;
+printf("calling stream open\n");
+  sinfo.stream_id = -1;
   sinfo.stream_flag = QUIC_STREAM_FLAG_UNI;
   rc = getsockopt(ctx->q.sockfd, SOL_QUIC, QUIC_SOCKOPT_STREAM_OPEN, &sinfo,
                   &len);
@@ -694,10 +696,10 @@ static CURLcode cf_linuxq_shutdown(struct Curl_cfilter *cf,
 {
   struct cf_linuxq_ctx *ctx = cf->ctx;
   struct cf_call_data save;
-  struct pkt_io_ctx pktx;
   struct quic_connection_close cclose;
   CURLcode result = CURLE_OK;
   int rc;
+  infof(data, "shutdown");
 
   if(cf->shutdown || !ctx->qconn) {
     *done = TRUE;
@@ -706,7 +708,6 @@ static CURLcode cf_linuxq_shutdown(struct Curl_cfilter *cf,
 
   CF_DATA_SAVE(save, cf, data);
   *done = FALSE;
-  pktx_init(&pktx, cf, data);
 
   if(!ctx->shutdown_started) {
 
@@ -721,6 +722,7 @@ static CURLcode cf_linuxq_shutdown(struct Curl_cfilter *cf,
     CURL_TRC_CF(data, cf, "start shutdown(err_type=%hu, err_code=%u) -> %d",
                 cclose.frame, cclose.errcode, rc);
   }
+  *done = TRUE;
 
 out:
   CF_DATA_RESTORE(cf, save);
@@ -873,6 +875,17 @@ static CURLcode cf_connect_start(struct Curl_cfilter *cf,
   if(rc == -1)
     return CURLE_QUIC_CONNECT_ERROR;
 
+  ctx->transport_params.max_idle_timeout = CURL_QUIC_MAX_IDLE_MS * 1000;
+  ctx->transport_params.plpmtud_probe_timeout = 5000000;
+  ctx->transport_params.active_connection_id_limit = 3;
+  rc = setsockopt(ctx->q.sockfd, SOL_QUIC, QUIC_SOCKOPT_TRANSPORT_PARAM,
+                  &ctx->transport_params, len);
+  if(rc == -1)
+{ printf("sockopt fail\n");
+    return CURLE_FAILED_INIT;
+}
+
+
   rc = getsockopt(ctx->q.sockfd, SOL_QUIC, QUIC_SOCKOPT_TRANSPORT_PARAM,
                   &ctx->transport_params, &len);
   if(rc == -1)
@@ -900,9 +913,9 @@ static CURLcode cf_linuxq_connect(struct Curl_cfilter *cf,
   CURLcode result = CURLE_OK;
   struct cf_call_data save;
   struct curltime now;
-  struct pkt_io_ctx pktx;
   struct quic_event_option eopt;
   int rc;
+  uint8_t i;
 
   if(cf->connected) {
     *done = TRUE;
@@ -913,14 +926,11 @@ static CURLcode cf_linuxq_connect(struct Curl_cfilter *cf,
   if(!cf->next->connected) {
     result = Curl_conn_cf_connect(cf->next, data, blocking, done);
     if(result || !*done)
-{
       return result;
-}
   }
 
   *done = FALSE;
   now = Curl_now();
-  pktx_init(&pktx, cf, data);
 
   CF_DATA_SAVE(save, cf, data);
 
@@ -950,32 +960,19 @@ static CURLcode cf_linuxq_connect(struct Curl_cfilter *cf,
   CURL_TRC_CF(data, cf, "handshake complete after %dms",
              (int)Curl_timediff(now, ctx->started_at));
 
-  ctx->transport_params.max_idle_timeout = CURL_QUIC_MAX_IDLE_MS * 1000;
-  ctx->transport_params.plpmtud_probe_timeout = 3000000;
-  rc = setsockopt(ctx->q.sockfd, SOL_QUIC, QUIC_SOCKOPT_TRANSPORT_PARAM,
-                  &ctx->transport_params, sizeof(struct quic_transport_param));
-  if(rc == -1)
-    return CURLE_FAILED_INIT;
-
-  eopt.type = QUIC_EVENT_CONNECTION_CLOSE;
-  eopt.on = 1;
-  rc = setsockopt(ctx->q.sockfd, SOL_QUIC, QUIC_SOCKOPT_EVENT, &eopt,
-                  sizeof(eopt));
-  if(rc == -1)
-    return CURLE_QUIC_CONNECT_ERROR;
+  for(i = 1; i < QUIC_EVENT_END; i++) {
+    eopt.type = i; //QUIC_EVENT_CONNECTION_CLOSE; // XXX
+    eopt.on = 1;
+    rc = setsockopt(ctx->q.sockfd, SOL_QUIC, QUIC_SOCKOPT_EVENT, &eopt,
+                    sizeof(eopt));
+    if(rc == -1)
+      return CURLE_QUIC_CONNECT_ERROR;
+  }
 
   if(init_ngh3_conn(cf) != CURLE_OK) {
     result = CURLE_QUIC_CONNECT_ERROR;
     goto out;
   }
-
-  result = cf_progress_ingress(cf, data, &pktx);
-  if(result)
-    goto out;
-
-  result = cf_progress_egress(cf, data);
-  if(result)
-    goto out;
 
 #if 0
   result = qng_verify_peer(cf, data);
@@ -990,16 +987,6 @@ static CURLcode cf_linuxq_connect(struct Curl_cfilter *cf,
   connkeep(cf->conn, "HTTP/3 default");
 
 out:
-  if(result == CURLE_RECV_ERROR && ctx->qconn &&
-     ctx->connection_close) {
-     //ngtcp2_conn_in_draining_period(ctx->qconn)) {
-    /* When a QUIC server instance is shutting down, it may send us a
-     * CONNECTION_CLOSE right away. Our connection then enters the DRAINING
-     * state. The CONNECT may work in the near future again. Indicate
-     * that as a "weird" reply. */
-    result = CURLE_WEIRD_SERVER_REPLY;
-  }
-
 #ifndef CURL_DISABLE_VERBOSE_STRINGS
   if(result) {
     struct ip_quadruple ip;
@@ -1009,10 +996,6 @@ out:
           ip.remote_ip, ip.remote_port, curl_easy_strerror(result));
   }
 #endif
-/*
-  if(!result && ctx->qconn) {
-    result = check_and_set_expiry(cf, data, &pktx);
-  }*/
   if(result || *done)
     CURL_TRC_CF(data, cf, "connect -> %d, done=%d", result, *done);
   CF_DATA_RESTORE(cf, save);
@@ -1028,6 +1011,9 @@ static ssize_t cf_linuxq_recv(struct Curl_cfilter *cf, struct Curl_easy *data,
   ssize_t nread = -1;
   struct cf_call_data save;
   struct pkt_io_ctx pktx;
+
+  infof(data, "cf_linuxq_recv");
+
 
   (void)ctx;
   (void)buf;
@@ -1046,8 +1032,7 @@ static ssize_t cf_linuxq_recv(struct Curl_cfilter *cf, struct Curl_easy *data,
     goto out;
   }
 
-  if(cf_progress_ingress(cf, data, &pktx)) {
-    *err = CURLE_RECV_ERROR;
+  if((*err = cf_progress_ingress(cf, data, &pktx))) {
     nread = -1;
     goto out;
   }
@@ -1068,17 +1053,6 @@ static ssize_t cf_linuxq_recv(struct Curl_cfilter *cf, struct Curl_easy *data,
   nread = -1;
 
 out:
-  if(cf_progress_egress(cf, data)) {
-    *err = CURLE_SEND_ERROR;
-    nread = -1;
-  }/*
-  else {
-    CURLcode result2 = check_and_set_expiry(cf, data, &pktx);
-    if(result2) {
-      *err = result2;
-      nread = -1;
-    }
-  }*/
   CURL_TRC_CF(data, cf, "[%" CURL_PRId64 "] cf_recv(blen=%zu) -> %zd, %d",
               stream? stream->id : -1, blen, nread, *err);
   CF_DATA_RESTORE(cf, save);
@@ -1198,7 +1172,8 @@ static ssize_t h3_stream_open(struct Curl_cfilter *cf,
     nva[i].flags = NGHTTP3_NV_FLAG_NONE;
   }
 
-  sinfo.stream_id = 0;
+printf("calling stream open\n");
+  sinfo.stream_id = -1;
   sinfo.stream_flag = 0;
   rc = getsockopt(ctx->q.sockfd, SOL_QUIC, QUIC_SOCKOPT_STREAM_OPEN, &sinfo,
                   &slen);
@@ -1286,12 +1261,6 @@ static ssize_t cf_linuxq_send(struct Curl_cfilter *cf, struct Curl_easy *data,
   DEBUGASSERT(ctx->h3conn);
   pktx_init(&pktx, cf, data);
   *err = CURLE_OK;
-
-  result = cf_progress_ingress(cf, data, &pktx);
-  if(result) {
-    *err = result;
-    sent = -1;
-  }
 
   if(!stream || stream->id < 0) {
     if(ctx->shutdown_started) {
@@ -1421,7 +1390,10 @@ static CURLcode recv_pkt(const unsigned char *pkt, size_t pktlen,
   struct quic_stream_info sinfo;
   union quic_event *qev;
   int rv;
+struct quic_transport_param rp = {0};
+  socklen_t len = sizeof(rp);
 
+failf(data, "in recv_pkt");
   ++pktx->pkt_count;
 
   if(msg->msg_flags & MSG_NOTIFICATION) {
@@ -1432,8 +1404,16 @@ static CURLcode recv_pkt(const unsigned char *pkt, size_t pktlen,
     case QUIC_EVENT_CONNECTION_CLOSE:
       qev = (union quic_event *)&pkt[1];
       ctx->last_error = qev->close.errcode;
-      ctx->connection_close = TRUE;
-      return CURLE_OK;
+      failf(data, "connection close error code: %hhu",
+            qev->close.errcode);
+  rp.remote = 1;
+  rv = getsockopt(ctx->q.sockfd, SOL_QUIC, QUIC_SOCKOPT_TRANSPORT_PARAM, &rp,
+                  &len);
+      failf(data, "remote limit: %lu",
+  rp.active_connection_id_limit);
+      cf->shutdown = 1; // XXX: this exits curl,
+      /* otw maybe cleaning up the quic context is needed for restart */
+      return CURLE_HTTP3; // XXX
     default:
       return CURLE_RECV_ERROR;
     }
@@ -1508,15 +1488,14 @@ static CURLcode cf_progress_egress(struct Curl_cfilter *cf,
   nghttp3_vec vec[16];
   uint8_t msg_ctrl[CMSG_SPACE(sizeof(struct quic_stream_info))];
 
+  msg.msg_iov = (struct iovec *)&vec;
+  msg.msg_control = msg_ctrl;
+  msg.msg_controllen = sizeof(msg_ctrl);
 
   cm = CMSG_FIRSTHDR(&msg);
   cm->cmsg_level = IPPROTO_QUIC;
   cm->cmsg_type = 0;
   cm->cmsg_len = sizeof(msg_ctrl);
-
-  msg.msg_iov = (struct iovec *)&vec;
-  msg.msg_control = msg_ctrl;
-  msg.msg_controllen = sizeof(msg_ctrl);
 
   sinfo = (struct quic_stream_info *)CMSG_DATA(cm);
 
@@ -1533,10 +1512,10 @@ static CURLcode cf_progress_egress(struct Curl_cfilter *cf,
       if(veccnt < 0) {
         failf(data, "nghttp3_conn_writev_stream returned error: %s",
               nghttp3_strerror((int)veccnt));
+
         einfo.stream_id = (uint64_t)stream_id;
         einfo.errcode = (uint32_t)
                         nghttp3_err_infer_quic_app_error_code((int)veccnt);
-
         setsockopt(ctx->q.sockfd, SOL_QUIC, QUIC_SOCKOPT_STREAM_RESET, &einfo,
                    sizeof(einfo));
         return CURLE_SEND_ERROR;
@@ -1544,6 +1523,8 @@ static CURLcode cf_progress_egress(struct Curl_cfilter *cf,
 
       if(fin)
         flags |= QUIC_STREAM_FLAG_FIN;
+      else if(veccnt == 0)
+        goto out;
     }
 
     sinfo->stream_id = (uint64_t)stream_id;
@@ -1690,7 +1671,6 @@ static bool cf_linuxq_conn_is_alive(struct Curl_cfilter *cf,
     /* This happens before we have sent off a request and the connection is
        not in use by any other transfer, there should not be any data here,
        only "protocol frames" */
-    *input_pending = FALSE;
     result = cf_progress_ingress(cf, data, NULL);
     CURL_TRC_CF(data, cf, "is_alive, progress ingress -> %d", result);
     alive = result? FALSE : TRUE;

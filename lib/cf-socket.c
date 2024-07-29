@@ -2033,7 +2033,7 @@ out:
 
 struct Curl_cftype Curl_cft_quic = {
   "QUIC",
-  CF_TYPE_IP_CONNECT | CF_TYPE_SSL | CF_TYPE_MULTIPLEX,
+  CF_TYPE_IP_CONNECT,
   CURL_LOG_LVL_NONE,
   cf_socket_destroy,
   cf_quic_connect,
@@ -2276,7 +2276,9 @@ CURLcode Curl_conn_tcp_accepted_set(struct Curl_easy *data,
 static bool cf_is_socket(struct Curl_cfilter *cf)
 {
   return cf && (cf->cft == &Curl_cft_tcp ||
+#ifdef USE_LINUX_QUIC
                 cf->cft == &Curl_cft_quic ||
+#endif
                 cf->cft == &Curl_cft_udp ||
                 cf->cft == &Curl_cft_unix ||
                 cf->cft == &Curl_cft_tcp_accept);
