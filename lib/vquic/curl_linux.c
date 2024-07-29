@@ -26,8 +26,7 @@
 
 #if defined(USE_LINUX_QUIC) && defined(USE_NGHTTP3)
 #include <linux/quic.h>
-//#include <netinet/quic.h>
-#include <libquic.h>
+#include <netinet/quic.h>
 #include <nghttp3/nghttp3.h>
 
 #include "urldata.h"

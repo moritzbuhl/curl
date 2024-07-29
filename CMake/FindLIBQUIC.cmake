@@ -33,8 +33,6 @@ Result Variables
 
 ``LIBQUIC_FOUND``
   System has libquic
-``LIBQUIC_INCLUDE_DIRS``
-  The libquic include directories.
 ``LIBQUIC_LIBRARIES``
   The libraries needed to use libquic
 ``LIBQUIC_VERSION``
@@ -45,12 +43,6 @@ if(UNIX)
   find_package(PkgConfig QUIET)
   pkg_search_module(PC_LIBQUIC quic)
 endif()
-
-find_path(LIBQUIC_INCLUDE_DIR libquic.h
-  HINTS
-    ${PC_LIBQUIC_INCLUDEDIR}
-    ${PC_LIBQUIC_INCLUDE_DIRS}
-)
 
 find_library(LIBQUIC_LIBRARY NAMES quic
   HINTS
@@ -66,13 +58,11 @@ include(FindPackageHandleStandardArgs)
 find_package_handle_standard_args(LIBQUIC
   REQUIRED_VARS
     LIBQUIC_LIBRARY
-    LIBQUIC_INCLUDE_DIR
   VERSION_VAR LIBQUIC_VERSION
 )
 
 if(LIBQUIC_FOUND)
   set(LIBQUIC_LIBRARIES    ${LIBQUIC_LIBRARY})
-  set(LIBQUIC_INCLUDE_DIRS ${LIBQUIC_INCLUDE_DIR})
 endif()
 
-mark_as_advanced(LIBQUIC_INCLUDE_DIRS LIBQUIC_LIBRARIES)
+mark_as_advanced(LIBQUIC_LIBRARIES)
