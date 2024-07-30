@@ -2275,11 +2275,11 @@ CURLcode Curl_conn_tcp_accepted_set(struct Curl_easy *data,
 static bool cf_is_socket(struct Curl_cfilter *cf)
 {
   return cf && (cf->cft == &Curl_cft_tcp ||
+                cf->cft == &Curl_cft_udp ||
+                cf->cft == &Curl_cft_unix ||
 #ifdef USE_LINUX_QUIC
                 cf->cft == &Curl_cft_quic ||
 #endif
-                cf->cft == &Curl_cft_udp ||
-                cf->cft == &Curl_cft_unix ||
                 cf->cft == &Curl_cft_tcp_accept);
 }
 
