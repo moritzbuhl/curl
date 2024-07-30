@@ -1145,15 +1145,14 @@ static CURLcode cf_socket_open(struct Curl_cfilter *cf,
 #ifdef USE_IPV6
   is_tcp = (ctx->addr.family == AF_INET
             || ctx->addr.family == AF_INET6) &&
-           ctx->addr.socktype == SOCK_STREAM
+           ctx->addr.socktype == SOCK_STREAM;
 #else
   is_tcp = (ctx->addr.family == AF_INET) &&
-           ctx->addr.socktype == SOCK_STREAM
+           ctx->addr.socktype == SOCK_STREAM;
 #endif
 #ifdef USE_LINUX_QUIC
-           && ctx->addr.protocol != IPPROTO_QUIC;
-#else
-           ;
+  if(ctx->addr.protocol == IPPROTO_QUIC)
+    is_tcp = 0;
 #endif
   if(is_tcp && data->set.tcp_nodelay)
     tcpnodelay(data, ctx->sock);
