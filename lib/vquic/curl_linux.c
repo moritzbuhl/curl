@@ -587,10 +587,6 @@ static CURLcode init_ngh3_conn(struct Curl_cfilter *cf)
   struct quic_stream_info sinfo;
   socklen_t len = sizeof(sinfo);
 
-  /*if(ngtcp2_conn_get_streams_uni_left(ctx->qconn) < 3) {
-    return CURLE_QUIC_CONNECT_ERROR;
-  }*/
-
   nghttp3_settings_default(&ctx->h3settings);
 
   rc = nghttp3_conn_client_new(&ctx->h3conn,
@@ -667,7 +663,7 @@ static void cf_linuxq_adjust_pollset(struct Curl_cfilter *cf,
   if(want_recv || want_send) {
     struct h3_stream_ctx *stream = H3_STREAM_CTX(ctx, data);
     struct cf_call_data save;
-    bool /*c_exhaust,*/ s_exhaust;
+    bool s_exhaust;
 
     CF_DATA_SAVE(save, cf, data);
     s_exhaust = stream && stream->id >= 0;
@@ -1340,11 +1336,6 @@ static ssize_t cf_linuxq_send(struct Curl_cfilter *cf, struct Curl_easy *data,
   }
 
 out:
-  /*result = check_and_set_expiry(cf, data, &pktx);
-  if(result) {
-    *err = result;
-    sent = -1;
-  }*/
   CURL_TRC_CF(data, cf, "[%" CURL_PRId64 "] cf_send(len=%zu) -> %zd, %d",
               stream? stream->id : -1, len, sent, *err);
   CF_DATA_RESTORE(cf, save);
