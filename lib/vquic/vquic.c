@@ -492,15 +492,11 @@ static CURLcode recvmsg_packets(struct Curl_cfilter *cf,
   ssize_t nread;
   char errstr[STRERROR_LEN];
   CURLcode result = CURLE_OK;
-#ifdef USE_LINUX_QUIC
-  uint8_t msg_ctrl[CMSG_SPACE(sizeof(struct quic_stream_info))];
-#else
   uint8_t msg_ctrl[CMSG_SPACE(sizeof(uint16_t))];
   struct sockaddr_storage remote_addr;
   size_t gso_size;
   size_t pktlen, to;
   size_t offset;
-#endif
 
   msg_iov.iov_base = buf;
   msg_iov.iov_len = (int)sizeof(buf);
@@ -513,14 +509,11 @@ static CURLcode recvmsg_packets(struct Curl_cfilter *cf,
 
   DEBUGASSERT(max_pkts > 0);
   for(pkts = 0, total_nread = 0; pkts < max_pkts;) {
-#if 0
     msg.msg_name = &remote_addr;
     msg.msg_namelen = sizeof(remote_addr);
-#endif
     while((nread = recvmsg(qctx->sockfd, &msg, 0)) == -1 &&
           SOCKERRNO == EINTR)
       ;
-infof(data, "call to recvmsg");
     if(nread == -1) {
       if(SOCKERRNO == EAGAIN || SOCKERRNO == EWOULDBLOCK) {
         goto out;
@@ -544,12 +537,6 @@ infof(data, "call to recvmsg");
 
       if(result)
         goto out;
-#ifdef USE_LINUX_QUIC
-      result =
-        recv_cb(buf, nread, &msg, cf, data, userp);
-      if(result)
-        goto out;
-#else
     gso_size = msghdr_get_udp_gro(&msg);
     if(gso_size == 0) {
       gso_size = (size_t)nread;
@@ -566,14 +553,11 @@ infof(data, "call to recvmsg");
         pktlen = gso_size;
       }
 
-      result =
-        recv_cb(buf + offset, pktlen,
-                         msg.msg_name, msg.msg_name_len, 0,
-                         userp);
+      result = recv_cb(buf + offset, pktlen, msg.msg_name, msg.msg_name_len, 0,
+                       userp);
       if(result)
         goto out;
     }
-#endif
   }
 
 out:
