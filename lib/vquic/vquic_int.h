@@ -77,16 +77,10 @@ CURLcode vquic_flush(struct Curl_cfilter *cf, struct Curl_easy *data,
                      struct cf_quic_ctx *qctx);
 
 
-#ifdef USE_LINUX_QUIC
-typedef CURLcode vquic_recv_pkt_cb(const unsigned char *pkt, size_t pktlen,
-                                   struct msghdr *msg, struct Curl_cfilter *cf,
-                                   struct Curl_easy *data, void *userp);
-#else
 typedef CURLcode vquic_recv_pkt_cb(const unsigned char *pkt, size_t pktlen,
                                    struct sockaddr_storage *remote_addr,
                                    socklen_t remote_addrlen, int ecn,
                                    void *userp);
-#endif
 
 CURLcode vquic_recv_packets(struct Curl_cfilter *cf,
                             struct Curl_easy *data,
