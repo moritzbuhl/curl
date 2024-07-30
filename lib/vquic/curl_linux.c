@@ -374,7 +374,6 @@ static int cb_h3_recv_data(nghttp3_conn *conn, int64_t stream3_id,
   if(!stream)
     return NGHTTP3_ERR_CALLBACK_FAILURE;
 
-infof(data, "writing data uhuhuhuhuoh");
   h3_xfer_write_resp(cf, data, stream, (char *)buf, blen, FALSE);
   if(blen) {
     CURL_TRC_CF(data, cf, "[%" CURL_PRId64 "] ACK %zu bytes of DATA",
@@ -531,9 +530,8 @@ static int cb_h3_end_stream(nghttp3_conn *conn, int64_t stream_id,
   struct Curl_easy *data = stream_user_data;
   struct h3_stream_ctx *stream = H3_STREAM_CTX(ctx, data);
 
-infof(data, "ending stream! yeayeayea");
-  //stream->closed = TRUE;
-  //Curl_expire(data, 0, EXPIRE_RUN_NOW);
+  stream->closed = TRUE;
+  h3_drain_stream(cf, data);
 
   return 0;
 }
@@ -889,9 +887,7 @@ static CURLcode cf_connect_start(struct Curl_cfilter *cf,
   rc = setsockopt(ctx->q.sockfd, SOL_QUIC, QUIC_SOCKOPT_TRANSPORT_PARAM,
                   &ctx->transport_params, len);
   if(rc == -1)
-{ printf("sockopt fail\n");
     return CURLE_FAILED_INIT;
-}
 
 
   rc = getsockopt(ctx->q.sockfd, SOL_QUIC, QUIC_SOCKOPT_TRANSPORT_PARAM,
@@ -1020,7 +1016,6 @@ static ssize_t cf_linuxq_recv(struct Curl_cfilter *cf, struct Curl_easy *data,
   struct cf_call_data save;
   (void)ctx;
   (void)buf;
-infof(data, "call to recv!");
 
   CF_DATA_SAVE(save, cf, data);
   DEBUGASSERT(cf->connected);
@@ -1030,13 +1025,11 @@ infof(data, "call to recv!");
   *err = CURLE_OK;
 
   if(!stream || ctx->shutdown_started) {
-infof(data, "no stream or shutdown started in recv!");
     *err = CURLE_RECV_ERROR;
     goto out;
   }
 
   if(stream->xfer_result) {
-infof(data, "stream xfer_result in recv!");
     CURL_TRC_CF(data, cf, "[%" CURL_PRId64 "] xfer write failed", stream->id);
     cf_linuxq_stream_close(cf, data, stream);
     *err = stream->xfer_result;
@@ -1044,12 +1037,10 @@ infof(data, "stream xfer_result in recv!");
     goto out;
   }
   else if(stream->closed) {
-infof(data, "stream closed in recv!");
     nread = 0;
     goto out;
   }
 
-infof(data, "progressing ingress in recv!");
   if((*err = cf_progress_ingress(cf, data))) {
     nread = -1;
     goto out;
@@ -1417,10 +1408,6 @@ static CURLcode cf_linuxq_recv_pkt(struct Curl_cfilter *cf,
         ctx->last_error = qev->update.errcode;
       infof(data, "stream update id=%lu state=%u errcode=%u", qev->update.id,
             qev->update.state, qev->update.errcode);
-      /*if(qev->update.state == QUIC_STREAM_RECV_STATE_RECVD) {
-        struct h3_stream_ctx *stream = H3_STREAM_CTX(ctx, data);
-        cf_linuxq_stream_close(cf, data, stream);
-      }*/
       return CURLE_OK;
     case QUIC_EVENT_STREAM_MAX_STREAM:
       if(pktlen < 1 + sizeof(uint64_t))
@@ -1455,10 +1442,6 @@ static CURLcode cf_linuxq_recv_pkt(struct Curl_cfilter *cf,
     return CURLE_RECV_ERROR;
 
   memcpy(&sinfo, CMSG_DATA(cmsg), sizeof(sinfo));
-
-infof(data, "");
-infof(data, "pktlen=%lu stream_id=%lu flag=%u", pktlen, sinfo.stream_id, sinfo.stream_flag);
-infof(data, "");
 
   rv = cf_linuxq_recv_stream_data(cf, data, pkt, pktlen, sinfo.stream_id,
                                   sinfo.stream_flag);
