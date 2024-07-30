@@ -529,6 +529,8 @@ static int cb_h3_end_stream(nghttp3_conn *conn, int64_t stream_id,
   struct cf_linuxq_ctx *ctx = cf->ctx;
   struct Curl_easy *data = stream_user_data;
   struct h3_stream_ctx *stream = H3_STREAM_CTX(ctx, data);
+  (void)conn;
+  (void)stream_id;
 
   stream->closed = TRUE;
   h3_drain_stream(cf, data);
