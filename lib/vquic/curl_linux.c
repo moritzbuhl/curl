@@ -61,26 +61,6 @@
 #include "memdebug.h"
 
 
-/* A stream window is the maximum amount we need to buffer for
- * each active transfer. We use HTTP/3 flow control and only ACK
- * when we take things out of the buffer.
- * Chunk size is large enough to take a full DATA frame */
-#define H3_STREAM_WINDOW_SIZE (128 * 1024)
-#define H3_STREAM_CHUNK_SIZE   (16 * 1024)
-/* The pool keeps spares around and half of a full stream windows
- * seems good. More does not seem to improve performance.
- * The benefit of the pool is that stream buffer to not keep
- * spares. Memory consumption goes down when streams run empty,
- * have a large upload done, etc. */
-#define H3_STREAM_POOL_SPARES \
-          (H3_STREAM_WINDOW_SIZE / H3_STREAM_CHUNK_SIZE ) / 2
-/* Receive and Send max number of chunks just follows from the
- * chunk size and window size */
-#define H3_STREAM_SEND_CHUNKS \
-          (H3_STREAM_WINDOW_SIZE / H3_STREAM_CHUNK_SIZE)
-/*
- * Store linuxq version info in this buffer.
- */
 void Curl_linuxq_ver(char *p, size_t len)
 {
   const nghttp3_info *ht3 = nghttp3_version(0);
@@ -118,7 +98,6 @@ struct cf_linuxq_ctx {
 #define CF_CTX_CALL_DATA(cf)  \
   ((struct cf_linuxq_ctx *)(cf)->ctx)->call_data
 
-struct pkt_io_ctx;
 static CURLcode cf_progress_ingress(struct Curl_cfilter *cf,
                                     struct Curl_easy *data);
 static CURLcode cf_progress_egress(struct Curl_cfilter *cf,
@@ -243,23 +222,6 @@ static void h3_drain_stream(struct Curl_cfilter *cf,
     data->state.select_bits = bits;
     Curl_expire(data, 0, EXPIRE_RUN_NOW);
   }
-}
-
-struct pkt_io_ctx {
-  struct Curl_cfilter *cf;
-  struct Curl_easy *data;
-  size_t pkt_count;
-};
-
-static void pktx_init(struct pkt_io_ctx *pktx,
-                      struct Curl_cfilter *cf,
-                      struct Curl_easy *data)
-{
-  struct cf_linuxq_ctx *ctx = cf->ctx;
-  pktx->cf = cf;
-  pktx->data = data;
-  pktx->pkt_count = 0;
-  vquic_ctx_update_time(&ctx->q);
 }
 
 static CURLcode cf_linuxq_recv_stream_data(struct Curl_cfilter *cf,
@@ -1245,14 +1207,12 @@ static ssize_t cf_linuxq_send(struct Curl_cfilter *cf, struct Curl_easy *data,
   struct h3_stream_ctx *stream = H3_STREAM_CTX(ctx, data);
   ssize_t sent = 0;
   struct cf_call_data save;
-  struct pkt_io_ctx pktx;
   CURLcode result;
 
   CF_DATA_SAVE(save, cf, data);
   DEBUGASSERT(cf->connected);
   DEBUGASSERT(ctx->qconn);
   DEBUGASSERT(ctx->h3conn);
-  pktx_init(&pktx, cf, data);
   *err = CURLE_OK;
 
   if(!stream || stream->id < 0) {
