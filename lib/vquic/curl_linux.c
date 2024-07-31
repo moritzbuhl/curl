@@ -337,12 +337,6 @@ static int cb_h3_recv_data(nghttp3_conn *conn, int64_t stream3_id,
     return NGHTTP3_ERR_CALLBACK_FAILURE;
 
   h3_xfer_write_resp(cf, data, stream, (char *)buf, blen, FALSE);
-  if(blen) {
-    CURL_TRC_CF(data, cf, "[%" CURL_PRId64 "] ACK %zu bytes of DATA",
-                stream->id, blen);
-    //ngtcp2_conn_extend_max_stream_offset(ctx->qconn, stream->id, blen);
-    //ngtcp2_conn_extend_max_offset(ctx->qconn, blen);
-  }
   CURL_TRC_CF(data, cf, "[%" CURL_PRId64 "] DATA len=%zu", stream->id, blen);
   return 0;
 }
@@ -537,7 +531,7 @@ static nghttp3_callbacks ngh3_callbacks = {
   cb_h3_end_stream, /* end_stream */
   cb_h3_reset_stream,
   NULL, /* shutdown */
-  //NULL /* recv_settings */ /* XXX */
+  /* recv_settings */ /* XXX: not available in my nghttp3 version */
 };
 
 static CURLcode init_ngh3_conn(struct Curl_cfilter *cf)
@@ -648,7 +642,7 @@ static void cf_linuxq_ctx_clear(struct cf_linuxq_ctx *ctx)
   if(ctx->h3conn)
     nghttp3_conn_del(ctx->h3conn);
   if(ctx->qconn)
-    ctx->qconn = 0; // XXX
+    ctx->qconn = 0; /* XXX */
   Curl_dyn_free(&ctx->scratch);
   Curl_hash_clean(&ctx->streams);
   Curl_hash_destroy(&ctx->streams);
@@ -856,11 +850,11 @@ static CURLcode cf_connect_start(struct Curl_cfilter *cf,
     return CURLE_FAILED_INIT;
 
   ctx->handshake_params.timeout = 15000;
-  ctx->handshake_params.peername = cf->conn->host.name; // XXX
+  ctx->handshake_params.peername = cf->conn->host.name; /* XXX: proxy? */
 
 #if 0
   ctx->qconn = quic_conn_create(ctx->q.sockfd, &ctx->handshake_params)
-  if(!ctx->qconn) == NULL)
+  if(!ctx->qconn)
     return errno;
 #else
   ctx->qconn = 1;
@@ -912,8 +906,9 @@ static CURLcode cf_linuxq_connect(struct Curl_cfilter *cf,
   }
 
 #ifdef USE_GNUTLS
+    /* XXX: replace this with calls to Curl_vquic_tls_... */
     rc = quic_client_handshake_parms(ctx->q.sockfd, &ctx->handshake_params);
-    if(rc != 0) {
+    if(rc) {
       result = CURLE_QUIC_CONNECT_ERROR;
       goto out;
     }
@@ -924,8 +919,9 @@ static CURLcode cf_linuxq_connect(struct Curl_cfilter *cf,
   CURL_TRC_CF(data, cf, "handshake complete after %dms",
              (int)Curl_timediff(now, ctx->started_at));
 
+  /* XXX: We only use QUIC_EVENT_CONNECTION_CLOSE for now */
   for(i = 1; i < QUIC_EVENT_END; i++) {
-    eopt.type = i; //QUIC_EVENT_CONNECTION_CLOSE; // XXX
+    eopt.type = i;
     eopt.on = 1;
     rc = setsockopt(ctx->q.sockfd, SOL_QUIC, QUIC_SOCKOPT_EVENT, &eopt,
                     sizeof(eopt));
@@ -941,6 +937,7 @@ static CURLcode cf_linuxq_connect(struct Curl_cfilter *cf,
 #if 0
   result = qng_verify_peer(cf, data);
   if(!result) {
+    ; /* XXX: replace libquic */
   }
 #endif
 
@@ -1001,12 +998,10 @@ static ssize_t cf_linuxq_recv(struct Curl_cfilter *cf, struct Curl_easy *data,
     goto out;
   }
 
-  if((*err = cf_progress_ingress(cf, data))) {
-    nread = -1;
-    goto out;
-  }
+  *err = cf_progress_ingress(cf, data);
+  if(!*err)
+    *err = CURLE_AGAIN;
 
-  *err = CURLE_AGAIN;
   nread = -1;
 
 out:
@@ -1357,7 +1352,7 @@ static CURLcode cf_linuxq_recv_pkt(struct Curl_cfilter *cf,
       if(pktlen < 1 + sizeof(struct quic_stream_update))
         return CURLE_HTTP3;
       qev = (union quic_event *)&pkt[1];
-      if(qev->update.errcode) // XXX
+      if(qev->update.errcode) /* XXX: is this correct? */
         ctx->last_error = qev->update.errcode;
       infof(data, "stream update id=%lu state=%u errcode=%u", qev->update.id,
             qev->update.state, qev->update.errcode);
@@ -1383,7 +1378,7 @@ static CURLcode cf_linuxq_recv_pkt(struct Curl_cfilter *cf,
             qev->key_update_phase);
       return CURLE_OK;
     default:
-      return CURLE_OK;
+      return CURLE_HTTP3;
     }
   }
 
