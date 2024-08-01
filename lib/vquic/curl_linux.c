@@ -46,6 +46,7 @@
 #include "select.h"
 #include "inet_pton.h"
 #include "transfer.h"
+#include "vtls/gtls.h"
 #include "vquic.h"
 #include "vquic_int.h"
 #include "vquic-tls.h"
@@ -873,6 +874,7 @@ static CURLcode cf_linuxq_connect(struct Curl_cfilter *cf,
   struct curltime now;
   struct quic_event_option eopt;
   struct quic_transport_param rp = {0};
+  socklen_t len;
   int rc;
   uint8_t i;
 
@@ -935,6 +937,7 @@ static CURLcode cf_linuxq_connect(struct Curl_cfilter *cf,
     goto out;
   }
 
+  len = sizeof(rp);
   rp.remote = 1;
   rc = getsockopt(ctx->q.sockfd, SOL_QUIC, QUIC_SOCKOPT_TRANSPORT_PARAM, &rp,
                   &len);
@@ -942,7 +945,7 @@ static CURLcode cf_linuxq_connect(struct Curl_cfilter *cf,
     result = CURLE_QUIC_CONNECT_ERROR;
     goto out;
   }
-  ctx->max_bidi_streams = rp->max_streams_bidi;
+  ctx->max_bidi_streams = rp.max_streams_bidi;
 
 #if 0
   result = qng_verify_peer(cf, data);
