@@ -317,7 +317,7 @@ Follow the [In-kernel QUIC implementation](https://github.com/lxin/quic)
 instructions to install the loadable kernel module and header files.
 The kernel module is currently under active development, and the discussion
 on integrating it into the Linux source repository is ongoing.
-As the kernel module is under active development and not versioned,it's
+As the kernel module is under active development and not versioned, it's
 important to note that the following build instructions may require updates.
 Please also consider the instructions in the linked repository.
 
@@ -330,9 +330,6 @@ Build the quic kernel module:
      % ./autogen.sh
      % ./configure --prefix=/usr
      % make
-     % ln -s libquiche.so target/release/libquiche.so.0
-     % mkdir quiche/deps/boringssl/src/lib
-     % ln -vnf $(find target/release -name libcrypto.a -o -name libssl.a) quiche/deps/boringssl/src/lib/
 
 Build curl:
 
