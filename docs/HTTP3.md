@@ -238,27 +238,29 @@ Build curl:
 If `make install` results in `Permission denied` error, you need to prepend
 it with `sudo`.
 
-# linux quic version
+# linux QUIC version
 
-linux quic support is **EXPERIMENTAL**
+Linux QUIC support is **EXPERIMENTAL**
 
 Follow the [In-kernel QUIC implementation](https://github.com/lxin/quic)
 instructions to install the loadable kernel module and header files.
 The kernel module is currently under active development, and the discussion
 on integrating it into the Linux source repository is ongoing.
-As the kernel module is under active development and not versioned, it's
-important to note that the following build instructions may require updates.
+As the kernel module is under active development and not versioned,
+it is important to note that the following build instructions may
+require updates.
 Please also consider the instructions in the linked repository.
 
 ## Build
 
-Build the quic kernel module:
+Build the QUIC kernel module:
 
      % git clone https://github.com/lxin/quic
      % cd quic
      % ./autogen.sh
      % ./configure --prefix=/usr
      % make
+     % make install
 
 Build curl:
 
