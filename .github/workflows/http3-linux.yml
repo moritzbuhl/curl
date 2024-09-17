@@ -446,7 +446,7 @@ jobs:
         run: |
           cd $HOME/linux-quic
 
-          make -C modules install
+          sudo make -C modules install
         name: 'install linux-quic'
 
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
