@@ -760,6 +760,8 @@ jobs:
           # /home/runner/quiche/quiche/deps/boringssl/src/include
           # lib dir
           # /home/runner/quiche/quiche/deps/boringssl/src/lib
+          make
+          make install
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -774,10 +776,9 @@ jobs:
 
           ./autogen.sh
           ./configure --prefix=/usr
-          make
-          make install
+          make -C modules
 
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
         with:
           persist-credentials: false
 
