@@ -775,7 +775,7 @@ jobs:
           cd linux-quic
 
           ./autogen.sh
-          ./configure --prefix=/usr
+          ./configure --prefix=/usr PKG_CONFIG_PATH="$HOME/gnutls/build/lib/pkgconfig"
           make -C modules
 
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
