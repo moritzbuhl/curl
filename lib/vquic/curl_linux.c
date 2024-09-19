@@ -1787,6 +1787,7 @@ static CURLcode cf_linuxq_connect(struct Curl_cfilter *cf,
   CURL_TRC_CF(data, cf, "max bidi streams now %" FMT_PRIu64
               ", used %" FMT_PRIu64, (curl_uint64_t)ctx->max_bidi_streams,
               (curl_uint64_t)ctx->used_bidi_streams);
+  cf_linuxq_recvmsg(cf, data, &result);
 out:
 #ifndef CURL_DISABLE_VERBOSE_STRINGS
   if(result) {
@@ -1957,12 +1958,12 @@ again:
     goto again;
 
 out:
-  if(total)
+  if(total) {
     *err = CURLE_OK;
+    nread = total;
+  }
   CURL_TRC_CF(data, cf, "recvd %zd packet%s with %zd bytes -> %d", npkts,
-              npkts > 1? "s" : "", total, *err);
-  if(total)
-    return total;
+              npkts > 1? "s" : "", nread, *err);
   return nread;
 }
 
@@ -2063,6 +2064,7 @@ cb_h3_read_req_body(nghttp3_conn *conn, int64_t stream_id,
     nvecs = 1;
     vec[0].base = stream->buf;
     vec[0].len = stream->len;
+    stream->len = 0;
   }
 
   CURL_TRC_CF(data, cf, "[%" FMT_PRId64 "] read req body -> "
@@ -2336,6 +2338,9 @@ static ssize_t cf_linuxq_send(struct Curl_cfilter *cf, struct Curl_easy *data,
       goto out;
     }
     stream = H3_STREAM_CTX(ctx, data);
+    if(len > (size_t)sent)
+      eos = 0;
+    len = (size_t)sent;
   }
   else if(stream->xfer_result) {
     CURL_TRC_CF(data, cf, "[%" FMT_PRId64 "] xfer write failed", stream->id);
@@ -2369,15 +2374,13 @@ static ssize_t cf_linuxq_send(struct Curl_cfilter *cf, struct Curl_easy *data,
     sent = -1;
     goto out;
   }
-  else {
-    (void)nghttp3_conn_resume_stream(ctx->h3conn, stream->id);
-  }
 
-  stream->buf = (uint8_t *)buf + sent; /* XXX: shitty sendbuf */
-  stream->len = len - sent;
+  (void)nghttp3_conn_resume_stream(ctx->h3conn, stream->id);
+  stream->buf = (uint8_t *)buf; /* XXX: shitty sendbuf */
+  stream->len = len;
   stream->eos = eos;
-  cf_linuxq_sendmsg(cf, data, err);
   sent = stream->len; /* XXX */
+  cf_linuxq_sendmsg(cf, data, err);
 
 out:
   CURL_TRC_CF(data, cf, "[%" FMT_PRId64 "] cf_send(len=%zu, eos=%d) "
