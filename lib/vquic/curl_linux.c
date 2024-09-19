@@ -2338,9 +2338,6 @@ static ssize_t cf_linuxq_send(struct Curl_cfilter *cf, struct Curl_easy *data,
       goto out;
     }
     stream = H3_STREAM_CTX(ctx, data);
-    if(len > (size_t)sent)
-      eos = 0;
-    len = (size_t)sent;
   }
   else if(stream->xfer_result) {
     CURL_TRC_CF(data, cf, "[%" FMT_PRId64 "] xfer write failed", stream->id);
@@ -2374,12 +2371,13 @@ static ssize_t cf_linuxq_send(struct Curl_cfilter *cf, struct Curl_easy *data,
     sent = -1;
     goto out;
   }
-
-  (void)nghttp3_conn_resume_stream(ctx->h3conn, stream->id);
-  stream->buf = (uint8_t *)buf; /* XXX: shitty sendbuf */
-  stream->len = len;
-  stream->eos = eos;
-  sent = stream->len; /* XXX */
+  else {
+    (void)nghttp3_conn_resume_stream(ctx->h3conn, stream->id);
+    stream->buf = (uint8_t *)buf; /* XXX: shitty sendbuf */
+    stream->len = len;
+    stream->eos = eos;
+    sent = stream->len; /* XXX */
+  }
   cf_linuxq_sendmsg(cf, data, err);
 
 out:
