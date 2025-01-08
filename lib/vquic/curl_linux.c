@@ -53,6 +53,7 @@
 #include "vtls/keylog.h"
 #include "vtls/vtls.h"
 #include "curl_linux.h"
+#include "openssl/ssl.h"
 
 #include "warnless.h"
 
@@ -101,8 +102,8 @@ struct cf_linuxq_ctx {
   ((struct cf_linuxq_ctx *)(cf)->ctx)->call_data
 
 static void h3_stream_hash_free(void *stream);
-static ssize_t cf_linuxq_recvmsg(struct Curl_cfilter *, struct Curl_easy *,
-                                 CURLcode *);
+static ssize_t cf_linuxq_recv(struct Curl_cfilter *, struct Curl_easy *,
+                              char *, size_t, CURLcode *);
 
 static void cf_linuxq_ctx_init(struct cf_linuxq_ctx *ctx)
 {
@@ -211,7 +212,7 @@ static int crypto_send(struct cf_linuxq_ctx *ctx, const uint8_t *data,
 }
 
 #if defined(USE_OPENSSL)
-static uint8_t crypto_ssl_level(enum ssl_encryption_level_t level)
+static uint8_t crypto_ssl_level(OSSL_ENCRYPTION_LEVEL level)
 {
   switch(level) {
   case ssl_encryption_application:
@@ -228,7 +229,7 @@ static uint8_t crypto_ssl_level(enum ssl_encryption_level_t level)
   }
 }
 
-static enum ssl_encryption_level_t crypto_to_ssl_level(uint8_t level)
+static OSSL_ENCRYPTION_LEVEL crypto_to_ssl_level(uint8_t level)
 {
   switch(level) {
   case QUIC_CRYPTO_APP:
@@ -265,7 +266,7 @@ static uint32_t crypto_ssl_cipher_type(uint32_t cipher)
 }
 
 static int crypto_ssl_set_secret(SSL *ssl,
-                                 enum ssl_encryption_level_t ssl_level,
+                                 OSSL_ENCRYPTION_LEVEL ssl_level,
                                  const uint8_t *rx_secret,
                                  const uint8_t *tx_secret, size_t len)
 {
@@ -301,7 +302,7 @@ static int crypto_ssl_set_secret(SSL *ssl,
   return 1;
 }
 
-static int crypto_ssl_send(SSL *ssl, enum ssl_encryption_level_t ssl_level,
+static int crypto_ssl_send(SSL *ssl, OSSL_ENCRYPTION_LEVEL ssl_level,
                            const uint8_t *data, size_t len)
 {
   struct Curl_cfilter *cf = SSL_get_app_data(ssl);
@@ -323,8 +324,7 @@ static int crypto_ssl_flush(SSL *ssl)
   return 1;
 }
 
-static int crypto_ssl_alert(SSL *ssl,
-                            enum ssl_encryption_level_t ssl_level,
+static int crypto_ssl_alert(SSL *ssl, OSSL_ENCRYPTION_LEVEL ssl_level,
                             uint8_t alert)
 {
   (void)ssl;
@@ -336,7 +336,7 @@ static int crypto_ssl_alert(SSL *ssl,
 
 #if defined(OPENSSL_IS_BORINGSSL) || defined(OPENSSL_IS_AWSLC)
 static int crypto_bossl_set_rx_secret(SSL *ssl,
-                                      enum ssl_encryption_level_t bossl_level,
+                                      OSSL_ENCRYPTION_LEVEL bossl_level,
                                       const SSL_CIPHER *cipher,
                                       const uint8_t *rx_secret, size_t len)
 {
@@ -345,7 +345,7 @@ static int crypto_bossl_set_rx_secret(SSL *ssl,
 }
 
 static int crypto_bossl_set_tx_secret(SSL *ssl,
-                                      enum ssl_encryption_level_t bossl_level,
+                                      OSSL_ENCRYPTION_LEVEL bossl_level,
                                       const SSL_CIPHER *cipher,
                                       const uint8_t *tx_secret, size_t len)
 {
@@ -379,7 +379,7 @@ static CURLcode crypto_ssl_do_handshake(struct Curl_cfilter *cf,
 {
   struct cf_linuxq_ctx *ctx = cf->ctx;
   SSL *ssl = ctx->tls.ossl.ssl;
-  enum ssl_encryption_level_t ssl_level;
+  OSSL_ENCRYPTION_LEVEL ssl_level;
   int rc;
 
   if(len > 0) {
@@ -965,7 +965,8 @@ static void cf_linuxq_stream_close(struct Curl_cfilter *cf,
     (void)setsockopt(ctx->q.sockfd, SOL_QUIC, QUIC_SOCKOPT_STREAM_RESET,
                      &einfo, sizeof(einfo));
   }
-  cf_linuxq_recvmsg(cf, data, &result); /* drain QUIC events */
+  /* XXX: do I need to call recv? */
+  cf_linuxq_recv(cf, data, NULL, 0, &result);
 }
 
 static void h3_data_done(struct Curl_cfilter *cf, struct Curl_easy *data)
@@ -1001,13 +1002,14 @@ static void h3_drain_stream(struct Curl_cfilter *cf,
 static CURLcode cf_linuxq_recv_stream_data(struct Curl_cfilter *cf,
                                            struct Curl_easy *data,
                                            const uint8_t *buf, size_t buflen,
-                                           int64_t sid, uint32_t flags)
+                                           int64_t sid, uint32_t flags,
+                                           void *userp)
 {
   struct cf_linuxq_ctx *ctx = cf->ctx;
+  ssize_t *nreadp = (ssize_t *)userp;
   curl_int64_t stream_id = (curl_int64_t)sid;
   nghttp3_ssize nconsumed;
   int fin = (flags & MSG_STREAM_FIN) ? 1 : 0;
-  (void)data;
 
   nconsumed =
     nghttp3_conn_read_stream(ctx->h3conn, stream_id, buf, buflen, fin);
@@ -1025,9 +1027,11 @@ static CURLcode cf_linuxq_recv_stream_data(struct Curl_cfilter *cf,
     }
     if(nconsumed ==  NGHTTP3_ERR_NOMEM)
       return CURLE_OUT_OF_MEMORY;
-    else
-      return CURLE_HTTP3;
+    return CURLE_HTTP3;
   }
+  if(*nreadp == -1)
+    *nreadp = 0;
+  *nreadp += nconsumed;
 
   return CURLE_OK;
 }
@@ -1102,7 +1106,6 @@ static int cb_h3_recv_data(nghttp3_conn *conn, int64_t stream3_id,
   struct cf_linuxq_ctx *ctx = cf->ctx;
   struct Curl_easy *data = stream_user_data;
   struct h3_stream_ctx *stream = H3_STREAM_CTX(ctx, data);
-
   (void)conn;
   (void)stream3_id;
 
@@ -1123,8 +1126,8 @@ static int cb_h3_acked_req_body(nghttp3_conn *conn, int64_t stream_id,
   struct Curl_easy *data = stream_user_data;
   struct h3_stream_ctx *stream = H3_STREAM_CTX(ctx, data);
   int rv;
-
   (void)len;
+  (void)data;
 
   if(!stream)
     return 0;
@@ -1149,7 +1152,6 @@ static int cb_h3_end_headers(nghttp3_conn *conn, int64_t sid,
   (void)fin;
   (void)cf;
 
-  CURL_TRC_CF(data, cf, "[] end_headers");
   if(!stream)
     return 0;
   /* add a CRLF only if we have received some headers */
@@ -1183,7 +1185,6 @@ static int cb_h3_recv_header(nghttp3_conn *conn, int64_t sid,
   (void)flags;
   (void)cf;
 
-  infof(data, "h3_recv_header");
   /* we might have cleaned up this transfer already */
   if(!stream)
     return 0;
@@ -1238,17 +1239,20 @@ static int cb_h3_stop_sending(nghttp3_conn *conn, int64_t stream_id,
 {
   struct Curl_cfilter *cf = user_data;
   struct cf_linuxq_ctx *ctx = cf->ctx;
+  struct Curl_easy *data = stream_user_data;
   struct quic_errinfo einfo;
   int rv;
   (void)conn;
-  (void)stream_user_data;
 
   einfo.stream_id = (uint64_t)stream_id;
   einfo.errcode = (uint32_t)app_error_code;
   rv = setsockopt(ctx->q.sockfd, SOL_QUIC, QUIC_SOCKOPT_STREAM_STOP_SENDING,
                   &einfo, sizeof(einfo));
-  if(rv == -1 && errno != EINVAL)
+  if(rv == -1) {
+    CURL_TRC_CF(data, cf, "[%" FMT_PRId64 "] stop sending -> %d", stream_id,
+                rv);
     return NGHTTP3_ERR_CALLBACK_FAILURE;
+  }
 
   return 0;
 }
@@ -1262,7 +1266,6 @@ static int cb_h3_end_stream(nghttp3_conn *conn, int64_t stream_id,
   struct h3_stream_ctx *stream = H3_STREAM_CTX(ctx, data);
   (void)conn;
   (void)stream_id;
-  infof(data, "h3_end_stream");
 
   stream->closed = TRUE;
   h3_drain_stream(cf, data);
@@ -1790,7 +1793,6 @@ static CURLcode cf_linuxq_connect(struct Curl_cfilter *cf,
   CURL_TRC_CF(data, cf, "max bidi streams now %" FMT_PRIu64
               ", used %" FMT_PRIu64, (curl_uint64_t)ctx->max_bidi_streams,
               (curl_uint64_t)ctx->used_bidi_streams);
-  cf_linuxq_recvmsg(cf, data, &result);
 out:
 #ifndef CURL_DISABLE_VERBOSE_STRINGS
   if(result) {
@@ -1819,9 +1821,9 @@ static struct cmsghdr *get_cmsg_stream_info(struct msghdr *msg)
   return cm;
 }
 
-static CURLcode cf_linuxq_recv_pkt(struct Curl_cfilter *cf,
+static CURLcode recv_pkt(struct Curl_cfilter *cf,
                          struct Curl_easy *data, struct msghdr *msg,
-                         size_t len)
+                         size_t len, void *userp)
 {
   struct cf_linuxq_ctx *ctx = cf->ctx;
   struct cmsghdr *cm = NULL;
@@ -1831,8 +1833,10 @@ static CURLcode cf_linuxq_recv_pkt(struct Curl_cfilter *cf,
   CURLcode result;
 
   if(msg->msg_flags & MSG_NOTIFICATION) {
-    if(len < 1)
+    if(len < 1) {
+      infof(data, "quic event: bad length");
       return CURLE_RECV_ERROR;
+    }
 
     infof(data, "quic event %hhu, %zd bytes", pkt[0], len);
     switch(pkt[0]) {
@@ -1873,6 +1877,12 @@ static CURLcode cf_linuxq_recv_pkt(struct Curl_cfilter *cf,
                     qev.max_stream);
       }
       return CURLE_AGAIN;
+    case QUIC_EVENT_CONNECTION_ID:
+      infof(data, "connection id event");
+      return CURLE_AGAIN;
+    case QUIC_EVENT_CONNECTION_ID:
+      infof(data, "connection id event");
+      return CURLE_AGAIN;
     case QUIC_EVENT_CONNECTION_MIGRATION:
       if(len < 1 + sizeof(uint8_t))
         return CURLE_HTTP3;
@@ -1908,67 +1918,8 @@ static CURLcode cf_linuxq_recv_pkt(struct Curl_cfilter *cf,
   memcpy(&sinfo, CMSG_DATA(cm), sizeof(sinfo));
 
   result = cf_linuxq_recv_stream_data(cf, data, pkt, len, sinfo.stream_id,
-                                      sinfo.stream_flags);
+                                      sinfo.stream_flags, userp);
   return result;
-}
-
-static ssize_t cf_linuxq_recvmsg(struct Curl_cfilter *cf,
-                                 struct Curl_easy *data, CURLcode *err)
-{
-  struct cf_linuxq_ctx *ctx = cf->ctx;
-  struct cf_quic_ctx *qctx = &ctx->q;
-  struct iovec msg_iov;
-  struct msghdr msg;
-  uint8_t buf[64*1024];
-  size_t npkts = 0;
-  ssize_t nread, total = 0;
-  char errstr[STRERROR_LEN];
-  uint8_t msg_ctrl[CMSG_SPACE(sizeof(struct quic_stream_info))];
-
-again:
-  msg_iov.iov_base = buf;
-  msg_iov.iov_len = (int)sizeof(buf);
-
-  memset(&msg, 0, sizeof(msg));
-  msg.msg_iov = &msg_iov;
-  msg.msg_iovlen = 1;
-  msg.msg_control = msg_ctrl;
-  msg.msg_controllen = sizeof(msg_ctrl);
-
-  nread = recvmsg(qctx->sockfd, &msg, 0);
-  if(nread == -1) {
-    if(SOCKERRNO == EAGAIN || SOCKERRNO == EWOULDBLOCK)
-      goto out;
-    if(!cf->connected && SOCKERRNO == ECONNREFUSED) {
-      struct ip_quadruple ip;
-      Curl_cf_socket_peek(cf->next, data, NULL, NULL, &ip);
-      failf(data, "QUIC: connection to %s port %u refused",
-            ip.remote_ip, ip.remote_port);
-      *err = CURLE_COULDNT_CONNECT;
-      goto out;
-    }
-    Curl_strerror(SOCKERRNO, errstr, sizeof(errstr));
-    failf(data, "QUIC: recvmsg() unexpectedly returned %zd (errno=%d; %s)",
-                nread, SOCKERRNO, errstr);
-    if(!npkts)
-      *err = CURLE_RECV_ERROR;
-    goto out;
-  }
-
-  npkts++;
-  total += nread;
-  *err = cf_linuxq_recv_pkt(cf, data, &msg, nread);
-  if(*err == CURLE_OK || *err == CURLE_AGAIN)
-    goto again;
-
-out:
-  if(total) {
-    *err = CURLE_OK;
-    nread = total;
-  }
-  CURL_TRC_CF(data, cf, "recvd %zd packet%s with %zd bytes -> %d", npkts,
-              npkts > 1 ? "s" : "", nread, *err);
-  return nread;
 }
 
 /* incoming data frames on the h3 stream */
@@ -1976,6 +1927,7 @@ static ssize_t cf_linuxq_recv(struct Curl_cfilter *cf, struct Curl_easy *data,
                               char *buf, size_t blen, CURLcode *err)
 {
   struct cf_linuxq_ctx *ctx = cf->ctx;
+  struct cf_quic_ctx *qctx = &ctx->q;
   struct h3_stream_ctx *stream = H3_STREAM_CTX(ctx, data);
   ssize_t nread = -1;
   struct cf_call_data save;
@@ -2003,7 +1955,6 @@ static ssize_t cf_linuxq_recv(struct Curl_cfilter *cf, struct Curl_easy *data,
     CURL_TRC_CF(data, cf, "[%" FMT_PRId64 "] xfer write failed", stream->id);
     cf_linuxq_stream_close(cf, data, stream);
     *err = stream->xfer_result;
-    nread = -1;
     goto out;
   }
   else if(stream->closed) {
@@ -2011,15 +1962,9 @@ static ssize_t cf_linuxq_recv(struct Curl_cfilter *cf, struct Curl_easy *data,
     goto out;
   }
 
-  nread = cf_linuxq_recvmsg(cf, data, err);
-  if(!*err) {
-    if(!ctx->q.got_first_byte) {
-      ctx->q.got_first_byte = TRUE;
-      ctx->q.first_byte_at = ctx->q.last_op;
-    }
-    *err = CURLE_AGAIN;
-    nread = -1;
-  }
+  *err = vquic_recv_packets(cf, data, qctx, 128, recv_pkt, &nread);
+  //if(!*err /* && nread == -1 */ ) /* XXX */
+   *err = CURLE_AGAIN; /* XXX */
 
 out:
   CURL_TRC_CF(data, cf, "[%" FMT_PRId64 "] cf_recv(blen=%zu) -> %zd, %d",
@@ -2075,10 +2020,6 @@ cb_h3_read_req_body(nghttp3_conn *conn, int64_t stream_id,
               "%d vecs%s", stream->id, (int)nvecs, stream->eos?" EOF":"");
   return (nghttp3_ssize)nvecs;
 }
-
-/* Index where :authority header field will appear in request header
-   field list. */
-#define AUTHORITY_DST_IDX 3
 
 static ssize_t h3_stream_open(struct Curl_cfilter *cf,
                               struct Curl_easy *data,
