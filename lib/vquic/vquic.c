@@ -30,9 +30,6 @@
 #ifdef USE_LINUX_QUIC
 #include <linux/quic.h>
 #endif
-#ifdef USE_LINUX_QUIC
-#include <linux/quic.h>
-#endif
 #ifdef HAVE_FCNTL_H
 #include <fcntl.h>
 #endif
