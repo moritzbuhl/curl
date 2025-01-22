@@ -1248,11 +1248,8 @@ static int cb_h3_stop_sending(nghttp3_conn *conn, int64_t stream_id,
   einfo.errcode = (uint32_t)app_error_code;
   rv = setsockopt(ctx->q.sockfd, SOL_QUIC, QUIC_SOCKOPT_STREAM_STOP_SENDING,
                   &einfo, sizeof(einfo));
-  if(rv == -1) {
-    CURL_TRC_CF(data, cf, "[%" FMT_PRId64 "] stop sending -> %d", stream_id,
-                rv);
+  if(rv == -1 && errno != ENOSTR) /* ENOSTR if the stream already is fin */
     return NGHTTP3_ERR_CALLBACK_FAILURE;
-  }
 
   return 0;
 }
@@ -1912,8 +1909,10 @@ static CURLcode recv_pkt(struct Curl_cfilter *cf,
   }
 
   cm = get_cmsg_stream_info(msg);
-  if(!cm)
+  if(!cm) {
+    infof(data, "quic recv pkt: no stream id");
     return CURLE_RECV_ERROR;
+  }
 
   memcpy(&sinfo, CMSG_DATA(cm), sizeof(sinfo));
 
@@ -1963,8 +1962,8 @@ static ssize_t cf_linuxq_recv(struct Curl_cfilter *cf, struct Curl_easy *data,
   }
 
   *err = vquic_recv_packets(cf, data, qctx, 128, recv_pkt, &nread);
-  //if(!*err /* && nread == -1 */ ) /* XXX */
-   *err = CURLE_AGAIN; /* XXX */
+  if(!*err)
+    *err = CURLE_AGAIN; /* XXX */
 
 out:
   CURL_TRC_CF(data, cf, "[%" FMT_PRId64 "] cf_recv(blen=%zu) -> %zd, %d",
