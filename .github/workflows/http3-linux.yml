@@ -200,6 +200,16 @@ jobs:
           key: "${{ runner.os }}-http3-build-${{ env.cache-name }}-${{ env.LINUX_QUIC_VERSION }}-${{ env.OPENSSL_VERSION }}-\
             ${{ env.NGHTTP3_VERSION }}"
 
+      - name: cache linux-quic
+        if: matrix.build.name == 'linux-quic'
+        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4
+        id: cache-linux-quic
+        env:
+          cache-name: cache-linux-quic
+        with:
+          path: /home/runner/linux-quic
+          key: ${{ runner.os }}-http3-build-${{ env.cache-name }}-linux-quic-${{ env.linux-quic-version }}
+
       - id: settings
         if: >-
           ${{ !steps.cache-awslc.outputs.cache-hit ||
@@ -214,7 +224,8 @@ jobs:
               !steps.cache-ngtcp2-boringssl.outputs.cache-hit ||
               !steps.cache-ngtcp2-openssl-prev.outputs.cache-hit ||
               !steps.cache-ngtcp2.outputs.cache-hit ||
-              !steps.cache-nghttp2.outputs.cache-hit }}
+              !steps.cache-nghttp2.outputs.cache-hit ||
+              !steps.cache-linux-quic.outputs.cache-hit }}
 
         run: echo 'needs-build=true' >> "$GITHUB_OUTPUT"
 
@@ -345,6 +356,19 @@ jobs:
           ./configure --disable-dependency-tracking --prefix="$PWD"/build --enable-lib-only
           make
           make install
+
+      - name: 'build linuxquic'
+      - if: steps.cache-linux-quic.outputs.cache-hit != 'true'
+        run: |
+          cd $HOME
+          git clone --quiet --depth=1 -b ${{ env.linux-quic-version }} https://github.com/lxin/quic.git linux-quic
+          cd linux-quic
+
+          ./autogen.sh
+          ./configure --prefix=$PWD/build \
+            PKG_CONFIG_PATH="$HOME/gnutls/build/lib/pkgconfig"
+          make -C modules
+        name: 'build linux-quic'
 
       - name: 'build ngtcp2'
         if: ${{ !steps.cache-ngtcp2.outputs.cache-hit }}
@@ -569,6 +593,15 @@ jobs:
             generate: >-
               -DCURL_USE_WOLFSSL=ON -DUSE_NGTCP2=ON
               -DUSE_ECH=ON
+
+          - name: linux-quic
+            PKG_CONFIG_PATH: '$HOME/gnutls/build/lib/pkgconfig:$HOME/nghttp3/build/lib/pkgconfig:$HOME/nghttp2/build/lib/pkgconfig'
+            configure: >-
+              LDFLAGS="-Wl,-rpath,$HOME/gnutls/build/lib"
+              --with-linux-quic --enable-warnings --enable-werror --enable-debug
+              --with-test-nghttpx="$HOME/nghttp2/build/bin/nghttpx"
+              --with-gnutls=$HOME/gnutls/build
+              --with-nghttp3=$HOME/nghttp3/build
 
     steps:
       - name: 'install prereqs'
