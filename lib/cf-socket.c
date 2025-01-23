@@ -2022,7 +2022,7 @@ static CURLcode cf_quic_connect(struct Curl_cfilter *cf,
   if(blocking)
     return CURLE_UNSUPPORTED_PROTOCOL;
 
-  *done = FALSE; /* a very negative world view is best */
+  *done = FALSE; /* a negative world view is best */
   if(ctx->sock == CURL_SOCKET_BAD) {
 
     result = cf_socket_open(cf, data);
