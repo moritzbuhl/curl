@@ -115,6 +115,16 @@ jobs:
           path: /home/runner/nghttp2/build
           key: ${{ runner.os }}-http3-build-${{ env.cache-name }}-${{ env.nghttp2-version }}-${{ env.quictls-version }}-${{ env.ngtcp2-version }}-${{ env.nghttp3-version }}
 
+      - name: cache linux-quic
+        if: matrix.build.name == 'linux-quic'
+        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4
+        id: cache-linux-quic
+        env:
+          cache-name: cache-linux-quic
+        with:
+          path: /home/runner/linux-quic
+          key: ${{ runner.os }}-http3-build-${{ env.cache-name }}-linux-quic-${{ env.linux-quic-version }}
+
       - id: settings
         if: |
           steps.cache-quictls-no-deprecated.outputs.cache-hit != 'true' ||
@@ -122,7 +132,8 @@ jobs:
           steps.cache-wolfssl.outputs.cache-hit != 'true' ||
           steps.cache-nghttp3.outputs.cache-hit != 'true' ||
           steps.cache-ngtcp2.outputs.cache-hit != 'true' ||
-          steps.cache-nghttp2.outputs.cache-hit != 'true'
+          steps.cache-nghttp2.outputs.cache-hit != 'true' ||
+          steps.cache-linux-quic.outputs.cache-hit != 'true'
         run: |
           echo 'needs-build=true' >> $GITHUB_OUTPUT
 
@@ -190,6 +201,18 @@ jobs:
           make
           make install
         name: 'build nghttp3'
+
+      - if: steps.cache-linux-quic.outputs.cache-hit != 'true'
+        run: |
+          cd $HOME
+          git clone --quiet --depth=1 -b ${{ env.linux-quic-version }} https://github.com/lxin/quic.git linux-quic
+          cd linux-quic
+
+          ./autogen.sh
+          ./configure --prefix=$PWD/build \
+            PKG_CONFIG_PATH="$HOME/gnutls/build/lib/pkgconfig"
+          make -C modules
+        name: 'build linux-quic'
 
       - if: steps.cache-ngtcp2.outputs.cache-hit != 'true'
         run: |
@@ -276,13 +299,6 @@ jobs:
               --with-quiche=$HOME/quiche/target/release
               --with-test-nghttpx="$HOME/nghttp2/build/bin/nghttpx"
               --with-ca-fallback
-          - name: linux-quic
-            configure: >-
-              PKG_CONFIG_PATH="$HOME/gnutls/build/lib/pkgconfig:$HOME/nghttp3/build/lib/pkgconfig:$HOME/nghttp2/build/lib/pkgconfig" LDFLAGS="-Wl,-rpath,$HOME/gnutls/build/lib"
-              --with-linux-quic --enable-warnings --enable-werror --enable-debug
-              --with-test-nghttpx="$HOME/nghttp2/build/bin/nghttpx"
-              --with-gnutls=$HOME/gnutls/build
-              --with-nghttp3=$HOME/nghttp3/build
 
           - name: quiche
             PKG_CONFIG_PATH: '$HOME/quiche/target/release'
@@ -292,6 +308,15 @@ jobs:
               -DTEST_NGHTTPX="$HOME/nghttp2/build/bin/nghttpx"
               -DHTTPD_NGHTTPX="$HOME/nghttp2/build/bin/nghttpx"
               -DCURL_CA_FALLBACK=ON
+
+          - name: linux-quic
+            PKG_CONFIG_PATH: '$HOME/gnutls/build/lib/pkgconfig:$HOME/nghttp3/build/lib/pkgconfig:$HOME/nghttp2/build/lib/pkgconfig'
+            configure: >-
+              LDFLAGS="-Wl,-rpath,$HOME/gnutls/build/lib"
+              --with-linux-quic --enable-warnings --enable-werror --enable-debug
+              --with-test-nghttpx="$HOME/nghttp2/build/bin/nghttpx"
+              --with-gnutls=$HOME/gnutls/build
+              --with-nghttp3=$HOME/nghttp3/build
 
     steps:
       - run: |
@@ -371,6 +396,17 @@ jobs:
           key: ${{ runner.os }}-http3-build-${{ env.cache-name }}-${{ env.nghttp2-version }}-${{ env.quictls-version }}-${{ env.ngtcp2-version }}-${{ env.nghttp3-version }}
           fail-on-cache-miss: true
 
+      - name: cache linux-quic
+        if: matrix.build.name == 'linux-quic'
+        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4
+        id: cache-linux-quic
+        env:
+          cache-name: cache-linux-quic
+        with:
+          path: /home/runner/linux-quic
+          key: ${{ runner.os }}-http3-build-${{ env.cache-name }}-linux-quic-${{ env.linux-quic-version }}
+          fail-on-cache-miss: true
+
       - name: cache openssl
         if: matrix.build.name == 'openssl-quic'
         uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4
@@ -420,27 +456,6 @@ jobs:
           # lib dir
           # $HOME/quiche/quiche/deps/boringssl/src/lib
         name: 'build quiche and boringssl'
-
-      - name: cache linux-quic
-        if: matrix.build.name == 'linux-quic'
-        uses: actions/cache@0c45773b623bea8c8e75f6c82b208c3cf94ea4f9 # v4
-        id: cache-linux-quic
-        env:
-          cache-name: cache-linux-quic
-        with:
-          path: /home/runner/linux-quic
-          key: ${{ runner.os }}-http3-build-${{ env.cache-name }}-linux-quic-${{ env.linux-quic-version }}
-
-      - if: matrix.build.name == 'linux-quic' && steps.cache-linux-quic.outputs.cache-hit != 'true'
-        run: |
-          cd $HOME
-          git clone --quiet --depth=1 -b ${{ env.linux-quic-version }} --recursive https://github.com/lxin/quic.git linux-quic
-          cd linux-quic
-
-          ./autogen.sh
-          ./configure --prefix=/usr PKG_CONFIG_PATH="$HOME/gnutls/build/lib/pkgconfig"
-          make -C modules
-        name: 'build linux-quic'
 
       - if: matrix.build.name == 'linux-quic'
         run: |
