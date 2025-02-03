@@ -27,6 +27,9 @@
 #ifdef HAVE_NETINET_UDP_H
 #include <netinet/udp.h>
 #endif
+#ifdef USE_LINUX_QUIC
+#include <linux/quic.h>
+#endif
 #ifdef HAVE_FCNTL_H
 #include <fcntl.h>
 #endif
@@ -35,6 +38,7 @@
 #include "dynbuf.h"
 #include "cfilters.h"
 #include "curl_trc.h"
+#include "curl_linux.h"
 #include "curl_msh3.h"
 #include "curl_ngtcp2.h"
 #include "curl_osslq.h"
@@ -63,6 +67,8 @@ void Curl_quic_ver(char *p, size_t len)
   Curl_ngtcp2_ver(p, len);
 #elif defined(USE_OPENSSL_QUIC) && defined(USE_NGHTTP3)
   Curl_osslq_ver(p, len);
+#elif defined(USE_LINUX_QUIC) && defined(USE_NGHTTP3)
+  Curl_linuxq_ver(p, len);
 #elif defined(USE_QUICHE)
   Curl_quiche_ver(p, len);
 #elif defined(USE_MSH3)
@@ -356,7 +362,11 @@ static CURLcode recvmmsg_packets(struct Curl_cfilter *cf,
 #define MMSG_NUM  16
   struct iovec msg_iov[MMSG_NUM];
   struct mmsghdr mmsg[MMSG_NUM];
+#ifdef USE_LINUX_QUIC
+  uint8_t msg_ctrl[MMSG_NUM * CMSG_SPACE(sizeof(struct quic_stream_info))];
+#else
   uint8_t msg_ctrl[MMSG_NUM * CMSG_SPACE(sizeof(int))];
+#endif
   struct sockaddr_storage remote_addr[MMSG_NUM];
   size_t total_nread = 0, pkts = 0;
   int mcount, i, n;
@@ -387,7 +397,12 @@ static CURLcode recvmmsg_packets(struct Curl_cfilter *cf,
       mmsg[i].msg_hdr.msg_name = &remote_addr[i];
       mmsg[i].msg_hdr.msg_namelen = sizeof(remote_addr[i]);
       mmsg[i].msg_hdr.msg_control = &msg_ctrl[i * CMSG_SPACE(sizeof(int))];
+#ifdef USE_LINUX_QUIC
+      mmsg[i].msg_hdr.msg_controllen = CMSG_SPACE(sizeof(struct
+                                                         quic_stream_info));
+#else
       mmsg[i].msg_hdr.msg_controllen = CMSG_SPACE(sizeof(int));
+#endif
     }
 
     while((mcount = recvmmsg(qctx->sockfd, mmsg, n, 0, NULL)) == -1 &&
@@ -433,8 +448,12 @@ static CURLcode recvmmsg_packets(struct Curl_cfilter *cf,
           pktlen = gso_size;
         }
 
+#ifdef USE_LINUX_QUIC
+        result = recv_cb(cf, data, &mmsg[i].msg_hdr, mmsg[i].msg_len, userp);
+#else
         result = recv_cb(bufs[i] + offset, pktlen, mmsg[i].msg_hdr.msg_name,
                          mmsg[i].msg_hdr.msg_namelen, 0, userp);
+#endif
         if(result)
           goto out;
       }
@@ -464,7 +483,11 @@ static CURLcode recvmsg_packets(struct Curl_cfilter *cf,
   ssize_t nread;
   char errstr[STRERROR_LEN];
   CURLcode result = CURLE_OK;
+#ifdef USE_LINUX_QUIC
+  uint8_t msg_ctrl[CMSG_SPACE(sizeof(struct quic_stream_info))];
+#else
   uint8_t msg_ctrl[CMSG_SPACE(sizeof(int))];
+#endif
   size_t gso_size;
   size_t pktlen;
   size_t offset, to;
@@ -522,8 +545,12 @@ static CURLcode recvmsg_packets(struct Curl_cfilter *cf,
         pktlen = gso_size;
       }
 
+#ifdef USE_LINUX_QUIC
+      result = recv_cb(cf, data, &msg, nread, userp);
+#else
       result =
         recv_cb(buf + offset, pktlen, msg.msg_name, msg.msg_namelen, 0, userp);
+#endif
       if(result)
         goto out;
     }
@@ -676,6 +703,8 @@ CURLcode Curl_cf_quic_create(struct Curl_cfilter **pcf,
   return Curl_cf_ngtcp2_create(pcf, data, conn, ai);
 #elif defined(USE_OPENSSL_QUIC) && defined(USE_NGHTTP3)
   return Curl_cf_osslq_create(pcf, data, conn, ai);
+#elif defined(USE_LINUX_QUIC) && defined(USE_NGHTTP3)
+  return Curl_cf_linuxq_create(pcf, data, conn, ai);
 #elif defined(USE_QUICHE)
   return Curl_cf_quiche_create(pcf, data, conn, ai);
 #elif defined(USE_MSH3)
@@ -697,6 +726,8 @@ bool Curl_conn_is_http3(const struct Curl_easy *data,
   return Curl_conn_is_ngtcp2(data, conn, sockindex);
 #elif defined(USE_OPENSSL_QUIC) && defined(USE_NGHTTP3)
   return Curl_conn_is_osslq(data, conn, sockindex);
+#elif defined(USE_LINUX_QUIC) && defined(USE_NGHTTP3)
+  return Curl_conn_is_linuxq(data, conn, sockindex);
 #elif defined(USE_QUICHE)
   return Curl_conn_is_quiche(data, conn, sockindex);
 #elif defined(USE_MSH3)
