@@ -24,6 +24,9 @@
 set(EXE_NAME curl)
 add_definitions("-DBUILDING_CURL")
 
+set(_curl_cfiles_gen "")
+set(_curl_hfiles_gen "")
+
 if(ENABLE_CURL_MANUAL AND HAVE_MANUAL_TOOLS)
   add_definitions("-DUSE_MANUAL")
   add_custom_command(
@@ -40,6 +43,8 @@ if(ENABLE_CURL_MANUAL AND HAVE_MANUAL_TOOLS)
       "${CMAKE_CURRENT_SOURCE_DIR}/tool_hugehelp.h"
       "${CURL_ASCIIPAGE}"
     VERBATIM)
+    list(APPEND _curl_cfiles_gen "tool_hugehelp.c")
+    list(APPEND _curl_hfiles_gen "tool_hugehelp.h")
 else()
   add_custom_command(
     OUTPUT "tool_hugehelp.c"
@@ -48,10 +53,6 @@ else()
       "${CMAKE_CURRENT_SOURCE_DIR}/tool_hugehelp.h"
     VERBATIM)
 endif()
-
-# Get 'CURL_CFILES', 'CURLX_CFILES', 'CURL_HFILES', 'CURLTOOL_LIBCURL_CFILES' variables
-curl_transform_makefile_inc("Makefile.inc" "${CMAKE_CURRENT_BINARY_DIR}/Makefile.inc.cmake")
-include("${CMAKE_CURRENT_BINARY_DIR}/Makefile.inc.cmake")
 
 if(CURL_CA_EMBED_SET)
   if(PERL_FOUND)
@@ -64,11 +65,15 @@ if(CURL_CA_EMBED_SET)
         "${CMAKE_CURRENT_SOURCE_DIR}/mk-file-embed.pl"
         "${CURL_CA_EMBED}"
       VERBATIM)
-    list(APPEND CURL_CFILES "tool_ca_embed.c")
+    list(APPEND _curl_cfiles_gen "tool_ca_embed.c")
   else()
     message(WARNING "Perl not found. Will not embed the CA bundle.")
   endif()
 endif()
+
+# Get 'CURL_CFILES', 'CURLX_CFILES', 'CURL_HFILES', 'CURLTOOL_LIBCURL_CFILES' variables
+curl_transform_makefile_inc("Makefile.inc" "${CMAKE_CURRENT_BINARY_DIR}/Makefile.inc.cmake")
+include("${CMAKE_CURRENT_BINARY_DIR}/Makefile.inc.cmake")
 
 if(WIN32)
   list(APPEND CURL_CFILES "curl.rc")
@@ -86,7 +91,7 @@ endif()
 
 add_executable(
   ${EXE_NAME}
-  ${CURL_CFILES} ${CURLX_CFILES} ${CURL_HFILES}
+  ${CURL_CFILES} ${_curl_cfiles_gen} ${CURLX_CFILES} ${CURL_HFILES} ${_curl_hfiles_gen}
 )
 
 add_executable(
@@ -112,8 +117,8 @@ if(ENABLE_UNICODE AND MINGW)
 endif()
 
 source_group("curlX source files" FILES ${CURLX_CFILES})
-source_group("curl source files" FILES ${CURL_CFILES})
-source_group("curl header files" FILES ${CURL_HFILES})
+source_group("curl source files" FILES ${CURL_CFILES} ${_curl_cfiles_gen})
+source_group("curl header files" FILES ${CURL_HFILES} ${_curl_hfiles_gen})
 
 include_directories(
   "${PROJECT_BINARY_DIR}/lib"  # for "curl_config.h"
