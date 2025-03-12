@@ -1493,9 +1493,6 @@ static CURLcode cf_linuxq_data_event(struct Curl_cfilter *cf,
   case CF_CTRL_DATA_PAUSE:
     result = h3_data_pause(cf, data, (arg1 != 0));
     break;
-  case CF_CTRL_DATA_DETACH:
-    h3_data_done(cf, data);
-    break;
   case CF_CTRL_DATA_DONE:
     h3_data_done(cf, data);
     break;
@@ -1570,7 +1567,8 @@ static int quic_ossl_new_session_cb(SSL *ssl, SSL_SESSION *ssl_sessionid)
   ctx = cf ? cf->ctx : NULL;
   data = cf ? CF_DATA_CURRENT(cf) : NULL;
   if(cf && data && ctx) {
-    Curl_ossl_add_session(cf, data, &ctx->peer, ssl_sessionid);
+    Curl_ossl_add_session(cf, data, ctx->peer.scache_key, ssl_sessionid,
+                          SSL_version(ssl), "h3");
     return 1;
   }
   return 0;
@@ -1628,14 +1626,10 @@ static CURLcode cf_connect_start(struct Curl_cfilter *cf,
   struct quic_config config = {0};
   int rc;
 
-  result = Curl_ssl_peer_init(&ctx->peer, cf, TRNSPRT_QUIC);
-  if(result)
-    return result;
-
 #define H3_ALPN "\x2h3\x5h3-29"
   result = Curl_vquic_tls_init(&ctx->tls, cf, data, &ctx->peer,
                                H3_ALPN, sizeof(H3_ALPN) - 1,
-                               tls_ctx_setup, &ctx->tls, cf);
+                               tls_ctx_setup, &ctx->tls, cf, NULL);
   if(result)
     return result;
 
@@ -1692,7 +1686,6 @@ static CURLcode qng_verify_peer(struct Curl_cfilter *cf,
   struct cf_linuxq_ctx *ctx = cf->ctx;
 
   cf->conn->bits.multiplex = TRUE; /* at least potentially multiplexed */
-  cf->conn->httpversion = 30;
 
   return Curl_vquic_tls_verify_peer(&ctx->tls, cf, data, &ctx->peer);
 }
@@ -1873,9 +1866,6 @@ static CURLcode recv_pkt(struct Curl_cfilter *cf,
         CURL_TRC_CF(data, cf, "max uni streams update to %" FMT_PRIu64,
                     qev.max_stream);
       }
-      return CURLE_AGAIN;
-    case QUIC_EVENT_CONNECTION_ID:
-      infof(data, "connection id event");
       return CURLE_AGAIN;
     case QUIC_EVENT_CONNECTION_ID:
       infof(data, "connection id event");
@@ -2399,6 +2389,9 @@ static CURLcode cf_linuxq_query(struct Curl_cfilter *cf,
       *when = ctx->handshake_at;
     return CURLE_OK;
   }
+  case CF_QUERY_HTTP_VERSION:
+    *pres1 = 30;
+    return CURLE_OK;
   default:
     break;
   }
@@ -2432,7 +2425,7 @@ out:
 
 struct Curl_cftype Curl_cft_http3 = {
   "HTTP/3",
-  CF_TYPE_IP_CONNECT | CF_TYPE_SSL | CF_TYPE_MULTIPLEX,
+  CF_TYPE_IP_CONNECT | CF_TYPE_SSL | CF_TYPE_MULTIPLEX | CF_TYPE_HTTP,
   0,
   cf_linuxq_destroy,
   cf_linuxq_connect,
