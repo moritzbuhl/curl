@@ -1845,7 +1845,7 @@ static CURLcode recv_pkt(struct Curl_cfilter *cf,
       ctx->shutdown_started = TRUE;
       cf_linuxq_conn_close(cf, data);
       return CURLE_OK;
-    case QUIC_EVENT_STREAM_UPDATE:
+    case QUIC_EVENT_STREAM_UPDATE: // XXX: call nghttp3_conn_close_stream if stream is closed?
       if(len < 1 + sizeof(qev.update))
         return CURLE_HTTP3;
       memcpy(&qev, &pkt[1], sizeof(qev.update));
