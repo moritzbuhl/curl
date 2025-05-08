@@ -198,7 +198,7 @@ static int crypto_send(struct cf_linuxq_ctx *ctx, const uint8_t *data,
   msg.msg_control = msg_ctrl;
   msg.msg_controllen = sizeof(msg_ctrl);
   cm = CMSG_FIRSTHDR(&msg);
-  cm->cmsg_level = IPPROTO_QUIC;
+  cm->cmsg_level = SOL_QUIC;
   cm->cmsg_type = QUIC_HANDSHAKE_INFO;
   cm->cmsg_len = CMSG_LEN(sizeof(*hsinfo));
   hsinfo = (struct quic_handshake_info *)CMSG_DATA(cm);
@@ -407,6 +407,7 @@ static CURLcode crypto_ssl_do_handshake(struct Curl_cfilter *cf,
   if(rc <= 0) {
     rc = SSL_get_error(ssl, rc);
     if(rc != SSL_ERROR_WANT_READ && rc != SSL_ERROR_WANT_WRITE) {
+      long unsigned int e;
       failf(data, "SSL_do_handshake: SSL_get_error: %d", rc);
       return CURLE_QUIC_CONNECT_ERROR;
     }
@@ -861,7 +862,7 @@ static ssize_t crypto_recv(struct Curl_cfilter *cf, struct Curl_easy *data,
 
   for(cm = CMSG_FIRSTHDR(&msg); cm != NULL; cm = CMSG_NXTHDR(&msg, cm))
     if(cm->cmsg_len == CMSG_LEN(sizeof(struct quic_handshake_info)) &&
-       cm->cmsg_level == IPPROTO_QUIC && cm->cmsg_type == QUIC_HANDSHAKE_INFO)
+       cm->cmsg_level == SOL_QUIC && cm->cmsg_type == QUIC_HANDSHAKE_INFO)
       break;
   if(cm) {
     memcpy(&hsinfo, CMSG_DATA(cm), sizeof(hsinfo));
@@ -1808,7 +1809,7 @@ static struct cmsghdr *get_cmsg_stream_info(struct msghdr *msg)
 
   for(cm = CMSG_FIRSTHDR(msg); cm != NULL; cm = CMSG_NXTHDR(msg, cm))
     if(cm->cmsg_len == CMSG_LEN(sizeof(struct quic_stream_info)) &&
-       cm->cmsg_level == IPPROTO_QUIC && cm->cmsg_type == QUIC_STREAM_INFO)
+       cm->cmsg_level == SOL_QUIC && cm->cmsg_type == QUIC_STREAM_INFO)
       break;
 
   return cm;
@@ -1956,8 +1957,8 @@ static ssize_t cf_linuxq_recv(struct Curl_cfilter *cf, struct Curl_easy *data,
   }
 
   *err = vquic_recv_packets(cf, data, qctx, 128, recv_pkt, &nread);
-  if(!*err)
-    *err = CURLE_AGAIN; /* XXX */
+  if(!*err && nread < 0)
+    *err = CURLE_AGAIN;
 
 out:
   CURL_TRC_CF(data, cf, "[%" FMT_PRId64 "] cf_recv(blen=%zu) -> %zd, %d",
@@ -2157,7 +2158,7 @@ static ssize_t cf_linuxq_sendmsg(struct Curl_cfilter *cf,
   msg.msg_controllen = sizeof(msg_ctrl);
 
   cm = CMSG_FIRSTHDR(&msg);
-  cm->cmsg_level = IPPROTO_QUIC;
+  cm->cmsg_level = SOL_QUIC;
   cm->cmsg_type = 0;
   cm->cmsg_len = CMSG_LEN(sizeof(*sinfo));
 
