@@ -89,7 +89,7 @@ struct cf_linuxq_ctx {
   struct curltime reconnect_at;      /* time the next attempt should start */
   struct dynbuf scratch;             /* temp buffer for header construction */
   struct Curl_hash streams;          /* hash `data->mid` to `h3_stream_ctx` */
-  uint64_t max_idle_ms;              /* max idle time for QUIC connection */
+  uint32_t max_idle_ms;              /* max idle time for QUIC connection */
   uint64_t used_bidi_streams;        /* bidi streams we have opened */
   uint64_t max_bidi_streams;         /* max bidi streams we can open */
   BIT(initialized);
@@ -277,13 +277,14 @@ static int crypto_ssl_set_secret(SSL *ssl,
   int rc;
   uint8_t level;
 
-  if(level == QUIC_CRYPTO_APP && rx_secret) {
+  if(ssl_level == ssl_encryption_application && rx_secret) {
     const uint8_t *extbuf;
     size_t extlen;
 
     SSL_get_peer_quic_transport_params(ssl, &extbuf, &extlen);
+    assert(extlen <= INT_MAX);
     rc = setsockopt(ctx->q.sockfd, SOL_QUIC, QUIC_SOCKOPT_TRANSPORT_PARAM_EXT,
-                    extbuf, extlen);
+                    extbuf, (socklen_t)extlen);
     if(rc)
       return 0;
   }
@@ -1239,10 +1240,10 @@ static int cb_h3_stop_sending(nghttp3_conn *conn, int64_t stream_id,
 {
   struct Curl_cfilter *cf = user_data;
   struct cf_linuxq_ctx *ctx = cf->ctx;
-  struct Curl_easy *data = stream_user_data;
   struct quic_errinfo einfo;
   int rv;
   (void)conn;
+  (void)stream_user_data;
 
   einfo.stream_id = (uint64_t)stream_id;
   einfo.errcode = (uint32_t)app_error_code;
@@ -1582,6 +1583,7 @@ static CURLcode tls_ctx_setup(struct Curl_cfilter *cf,
 {
   struct curl_tls_ctx *ctx = user_data;
   (void)cf;
+  (void)data;
 #ifdef USE_OPENSSL
   crypto_ssl_configure_context(ctx->ossl.ssl_ctx);
   /* Enable the session cache because it is a prerequisite for the

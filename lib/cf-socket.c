@@ -1926,7 +1926,7 @@ static CURLcode cf_quic_connect(struct Curl_cfilter *cf,
     return CURLE_OK;
   }
 
-  /* TODO: need to support blocking connect? */
+  /* XXX: does this need to support blocking connect? */
   if(blocking)
     return CURLE_UNSUPPORTED_PROTOCOL;
 
