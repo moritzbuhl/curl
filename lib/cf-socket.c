@@ -1953,28 +1953,10 @@ static CURLcode cf_quic_connect(struct Curl_cfilter *cf,
     }
   }
 
-  /* check socket for connect */
-  rc = SOCKET_WRITABLE(ctx->sock, 0);
-
-  if(rc == 0) { /* no connection yet */
-    CURL_TRC_CF(data, cf, "not connected yet");
-    return CURLE_OK;
-  }
-  else if(rc == CURL_CSELECT_OUT) {
-    if(verifyconnect(ctx->sock, &ctx->error)) {
-      /* we are connected with TCP, awesome! */
-      ctx->connected_at = Curl_now();
-      set_local_ip(cf, data);
-      *done = TRUE;
-      cf->connected = TRUE;
-      CURL_TRC_CF(data, cf, "connected");
-      return CURLE_OK;
-    }
-  }
-  else if(rc & CURL_CSELECT_ERR) {
-    (void)verifyconnect(ctx->sock, &ctx->error);
-    result = CURLE_COULDNT_CONNECT;
-  }
+  set_local_ip(cf, data);
+  *done = TRUE;
+  cf->connected = TRUE;
+  CURL_TRC_CF(data, cf, "connected");
 
 out:
   if(result) {

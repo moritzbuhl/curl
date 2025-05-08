@@ -88,7 +88,7 @@ struct cf_linuxq_ctx {
   struct curltime handshake_at;      /* time connect handshake finished */
   struct curltime reconnect_at;      /* time the next attempt should start */
   struct dynbuf scratch;             /* temp buffer for header construction */
-  struct Curl_hash streams;          /* hash `data->id` to `h3_stream_ctx` */
+  struct Curl_hash streams;          /* hash `data->mid` to `h3_stream_ctx` */
   uint64_t max_idle_ms;              /* max idle time for QUIC connection */
   uint64_t used_bidi_streams;        /* bidi streams we have opened */
   uint64_t max_bidi_streams;         /* max bidi streams we can open */
@@ -143,7 +143,7 @@ struct h3_stream_ctx {
 };
 
 #define H3_STREAM_CTX(ctx,data)   ((struct h3_stream_ctx *)(\
-            data ? Curl_hash_offt_get(&(ctx)->streams, (data)->id) : NULL))
+            data ? Curl_hash_offt_get(&(ctx)->streams, (data)->mid) : NULL))
 #define H3_STREAM_CTX_ID(ctx,id)  ((struct h3_stream_ctx *)(\
             Curl_hash_offt_get(&(ctx)->streams, (id))))
 
@@ -937,7 +937,7 @@ static CURLcode h3_data_setup(struct Curl_cfilter *cf,
   /* on send, we control how much we put into the buffer */
   Curl_h1_req_parse_init(&stream->h1, H1_PARSE_DEFAULT_MAX_LINE_LEN);
 
-  if(!Curl_hash_offt_set(&ctx->streams, data->id, stream)) {
+  if(!Curl_hash_offt_set(&ctx->streams, data->mid, stream)) {
     h3_stream_ctx_free(stream);
     return CURLE_OUT_OF_MEMORY;
   }
@@ -978,7 +978,7 @@ static void h3_data_done(struct Curl_cfilter *cf, struct Curl_easy *data)
     CURL_TRC_CF(data, cf, "[%" FMT_PRId64 "] easy handle is done",
                 stream->id);
     cf_linuxq_stream_close(cf, data, stream);
-    Curl_hash_offt_remove(&ctx->streams, data->id);
+    Curl_hash_offt_remove(&ctx->streams, data->mid);
   }
 }
 
@@ -1467,7 +1467,8 @@ static CURLcode h3_data_pause(struct Curl_cfilter *cf,
                               struct Curl_easy *data,
                               bool pause)
 {
-  /* TODO: there seems right now no API in ngtcp2 to shrink/enlarge
+  /* I don't understand this comment: what should be done? */
+  /* there seems right now no API in ngtcp2 to shrink/enlarge
    * the streams windows. As we do in HTTP/2. */
   if(!pause) {
     h3_drain_stream(cf, data);
@@ -1838,7 +1839,8 @@ static CURLcode recv_pkt(struct Curl_cfilter *cf,
       ctx->shutdown_started = TRUE;
       cf_linuxq_conn_close(cf, data);
       return CURLE_OK;
-    case QUIC_EVENT_STREAM_UPDATE: // XXX: call nghttp3_conn_close_stream if stream is closed?
+    case QUIC_EVENT_STREAM_UPDATE:
+      /* XXX: call nghttp3_conn_close_stream if stream is closed? */
       if(len < 1 + sizeof(qev.update))
         return CURLE_HTTP3;
       memcpy(&qev, &pkt[1], sizeof(qev.update));
