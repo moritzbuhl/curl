@@ -66,7 +66,7 @@
 void Curl_linuxq_ver(char *p, size_t len)
 {
   const nghttp3_info *ht3 = nghttp3_version(0);
-  (void)msnprintf(p, len, "linuxq nghttp3/%s", ht3->version_str);
+  (void)curl_msnprintf(p, len, "linuxq nghttp3/%s", ht3->version_str);
 }
 
 struct linuxq_conn {
@@ -122,7 +122,7 @@ static void cf_linuxq_ctx_free(struct cf_linuxq_ctx *ctx)
     Curl_hash_destroy(&ctx->streams);
     Curl_ssl_peer_cleanup(&ctx->peer);
   }
-  free(ctx);
+  curlx_free(ctx);
 }
 
 /**
@@ -211,7 +211,7 @@ static int crypto_send(struct cf_linuxq_ctx *ctx, const uint8_t *data,
   return 0;
 }
 
-#if defined(USE_OPENSSL)
+#ifdef USE_OPENSSL
 static uint8_t crypto_ssl_level(OSSL_ENCRYPTION_LEVEL level)
 {
   switch(level) {
@@ -799,7 +799,7 @@ static CURLcode crypto_do_handshake(struct Curl_cfilter *cf,
                                     const uint8_t *buf, size_t len)
 {
   int rc;
-#if defined(USE_OPENSSL)
+#ifdef USE_OPENSSL
   rc = crypto_ssl_do_handshake(cf, data, level, buf, len);
 #elif defined(USE_GNUTLS)
   rc = crypto_gtls_do_handshake(cf, data, level, buf, len);
@@ -845,9 +845,9 @@ static ssize_t crypto_recv(struct Curl_cfilter *cf, struct Curl_easy *data,
     return -1;
   nread = recvmsg(qctx->sockfd, &msg, 0);
   if(nread == -1) {
-    if(SOCKERRNO == EAGAIN || SOCKERRNO == EWOULDBLOCK)
+    if(SOCKERRNO == SOCKEAGAIN || SOCKERRNO == SOCKEWOULDBLOCK)
       goto out;
-    if(!cf->connected && SOCKERRNO == ECONNREFUSED) {
+    if(!cf->connected && SOCKERRNO == SOCKECONNREFUSED) {
       struct ip_quadruple ip;
       Curl_cf_socket_peek(cf->next, data, NULL, NULL, &ip);
       failf(data, "QUIC: connection to %s port %u refused",
@@ -907,7 +907,7 @@ static CURLcode crypto_handshake(struct Curl_cfilter *cf,
 static void h3_stream_ctx_free(struct h3_stream_ctx *stream)
 {
   Curl_h1_req_parse_free(&stream->h1);
-  free(stream);
+  curlx_free(stream);
 }
 
 static void h3_stream_hash_free(void *stream)
@@ -931,7 +931,7 @@ static CURLcode h3_data_setup(struct Curl_cfilter *cf,
   if(stream)
     return CURLE_OK;
 
-  stream = calloc(1, sizeof(*stream));
+  stream = curlx_calloc(1, sizeof(*stream));
   if(!stream)
     return CURLE_OUT_OF_MEMORY;
 
@@ -1288,7 +1288,7 @@ static int cb_h3_reset_stream(nghttp3_conn *conn, int64_t stream_id,
   rv = setsockopt(ctx->q.sockfd, SOL_QUIC, QUIC_SOCKOPT_STREAM_RESET, &einfo,
                   sizeof(einfo));
   CURL_TRC_CF(data, cf, "[%" FMT_PRId64 "] reset -> %d", stream_id, rv);
-  if(rv == -1 && errno != EINVAL)
+  if(rv == -1 && errno != SOCKEINVAL)
     return NGHTTP3_ERR_CALLBACK_FAILURE;
 
   return 0;
@@ -1421,7 +1421,7 @@ static void cf_linuxq_ctx_close(struct cf_linuxq_ctx *ctx)
   if(ctx->h3conn)
     nghttp3_conn_del(ctx->h3conn);
   if(ctx->qconn)
-    free(ctx->qconn);
+    curlx_free(ctx->qconn);
   ctx->call_data = save;
 }
 
@@ -1511,11 +1511,11 @@ static CURLcode cf_linuxq_data_event(struct Curl_cfilter *cf,
     if(stream && !stream->closed) {
       Curl_expire(data, 1, EXPIRE_QUIC);
       /* XXX: what to do? */
-/*
-      result = check_and_set_expiry(cf, data, NULL);
-      if(result)
-        CURL_TRC_CF(data, cf, "data idle, check_and_set_expiry -> %d", result);
-*/
+      /*
+       * result = check_and_set_expiry(cf, data, NULL);
+       * if(result)
+       *   CURL_TRC_CF(data, cf, "data idle, check_and_set_expiry -> %d", result);
+       */
     }
     break;
   }
@@ -1612,7 +1612,7 @@ static struct linuxq_conn *cf_conn_create(struct Curl_cfilter *cf,
   struct linuxq_conn *ret;
   (void)cf;
   (void)data;
-  ret = calloc(1, sizeof(*ret));
+  ret = curlx_calloc(1, sizeof(*ret));
 
   return ret;
 }
@@ -1649,7 +1649,7 @@ static CURLcode cf_connect_start(struct Curl_cfilter *cf,
   if(!sockaddr)
     return CURLE_QUIC_CONNECT_ERROR;
 
-  ctx->qconn = calloc(1, sizeof(*ctx->qconn));
+  ctx->qconn = curlx_calloc(1, sizeof(*ctx->qconn));
   if(!ctx->qconn)
     return CURLE_OUT_OF_MEMORY;
 
@@ -2064,7 +2064,7 @@ static ssize_t h3_stream_open(struct Curl_cfilter *cf,
   Curl_h1_req_parse_free(&stream->h1);
 
   nheader = Curl_dynhds_count(&h2_headers);
-  nva = malloc(sizeof(nghttp3_nv) * nheader);
+  nva = curlx_calloc(nheader, sizeof(nghttp3_nv));
   if(!nva) {
     *err = CURLE_OUT_OF_MEMORY;
     nwritten = -1;
@@ -2132,7 +2132,7 @@ static ssize_t h3_stream_open(struct Curl_cfilter *cf,
   }
 
 out:
-  free(nva);
+  curlx_free(nva);
   Curl_dynhds_free(&h2_headers);
   return nwritten;
 }
@@ -2210,8 +2210,8 @@ static ssize_t cf_linuxq_sendmsg(struct Curl_cfilter *cf,
     else if(sent == -1) {
       switch(SOCKERRNO) {
       case EAGAIN:
-#if EAGAIN != EWOULDBLOCK
-      case EWOULDBLOCK:
+#if SOCKEAGAIN != SOCKEWOULDBLOCK
+      case SOCKEWOULDBLOCK:
 #endif
         *result = CURLE_AGAIN;
         goto out;
@@ -2457,7 +2457,7 @@ CURLcode Curl_cf_linuxq_create(struct Curl_cfilter **pcf,
   CURLcode result;
 
   (void)data;
-  ctx = calloc(1, sizeof(*ctx));
+  ctx = curlx_calloc(1, sizeof(*ctx));
   if(!ctx) {
     result = CURLE_OUT_OF_MEMORY;
     goto out;
