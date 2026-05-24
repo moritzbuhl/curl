@@ -5240,7 +5240,6 @@ fi
 if test "$USE_NGTCP2_H3" = "1" ||
    test "$USE_QUICHE" = "1" ||
    test "$USE_LINUX_QUIC_H3" = "1"; then
-   test "$USE_OPENSSL_H3" = "1"; then
   if test "$CURL_WITH_MULTI_SSL" = "1"; then
     AC_MSG_ERROR([MultiSSL cannot be enabled with HTTP/3 and vice versa])
   fi
