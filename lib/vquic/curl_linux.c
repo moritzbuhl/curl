@@ -1512,9 +1512,9 @@ static CURLcode cf_linuxq_data_event(struct Curl_cfilter *cf,
       Curl_expire(data, 1, EXPIRE_QUIC);
       /* XXX: what to do? */
       /*
-       * result = check_and_set_expiry(cf, data, NULL);
-       * if(result)
-       *   CURL_TRC_CF(data, cf, "data idle, check_and_set_expiry -> %d", result);
+       *result = check_and_set_expiry(cf, data, NULL);
+       *if(result)
+       *CURL_TRC_CF(data, cf, "data idle, check_and_set_expiry -> %d", result);
        */
     }
     break;
