@@ -120,12 +120,14 @@ LIB_VTLS_HFILES =           \
   vtls/x509asn1.h
 
 LIB_VQUIC_CFILES =      \
+  vquic/curl_linux.c	\
   vquic/curl_ngtcp2.c   \
   vquic/curl_quiche.c   \
   vquic/vquic.c         \
   vquic/vquic-tls.c
 
 LIB_VQUIC_HFILES =      \
+  vquic/curl_linux.h	\
   vquic/curl_ngtcp2.h   \
   vquic/curl_quiche.h   \
   vquic/vquic.h         \

@@ -172,7 +172,7 @@ curl_unix_sockets_msg="no       (--enable-unix-sockets)"
          ssl_backends=
           curl_h1_msg="enabled  (internal)"
           curl_h2_msg="no       (--with-nghttp2)"
-          curl_h3_msg="no       (--with-ngtcp2 --with-nghttp3, --with-quiche)"
+          curl_h3_msg="no       (--with-ngtcp2 --with-nghttp3, --with-quiche, --with-linux-quic)"
 
 enable_altsvc="yes"
 hsts="yes"
@@ -3556,13 +3556,49 @@ if test "$USE_NGTCP2" = "1" && test "$WOLFSSL_ENABLED" = "1"; then
 fi
 
 dnl **********************************************************************
+dnl Check for Linux QUIC
+dnl **********************************************************************
+
+OPT_LINUX_QUIC="no"
+
+if test "x$disable_http" = "xyes" -o "x$GNUTLS_ENABLED" != "x1"; then
+  # without HTTP or without gnutls, no use
+  OPT_LINUX_QUIC="no"
+fi
+
+AC_ARG_WITH(linux-quic,
+AS_HELP_STRING([--with-linux-quic],[Enable Linux QUIC usage])
+AS_HELP_STRING([--without-linux-quic],[Disable Linux QUIC usage]),
+  [OPT_LINUX_QUIC=$withval])
+case "$OPT_LINUX_QUIC" in
+  no)
+    dnl --without-linux-quic option used
+    want_linux_quic="no"
+    ;;
+  yes)
+    dnl --with-linux-quic option used
+    want_linux_quic="yes"
+    ;;
+esac
+
+curl_linux_quic_msg="no      (--with-linux-quic)"
+if test "x$want_linux_quic" = "xyes"; then
+
+  if test "$NGTCP2_ENABLED" = 1 -o "$OPENSSL_QUIC_ENABLED" = 1; then
+    AC_MSG_ERROR([--with-linux-quic and --with-openssl-quic and --with-ngtcp2 are mutually exclusive])
+  fi
+  AC_DEFINE(USE_LINUX_QUIC, 1, [if linux QUIC is in use])
+  AC_SUBST(USE_LINUX_QUIC, [1])
+fi
+
+dnl **********************************************************************
 dnl Check for nghttp3 (HTTP/3 with ngtcp2)
 dnl **********************************************************************
 
 OPT_NGHTTP3="yes"
 
-if test "$USE_NGTCP2" != "1"; then
-  dnl without ngtcp2, nghttp3 is of no use for us
+if test "$USE_NGTCP2" != "1" || test "$USE_LINUX_QUIC" != "1"; then
+  dnl without ngtcp2 or linux-quic, nghttp3 is of no use for us
   OPT_NGHTTP3="no"
   want_nghttp3="no"
 fi
@@ -3591,9 +3627,9 @@ esac
 curl_http3_msg="no      (--with-nghttp3)"
 if test "$want_nghttp3" != "no"; then
 
-  if test "x$USE_NGTCP2" != "x1"; then
+  if test "$USE_NGTCP2" != "1" || test "$USE_LINUX_QUIC" != "1"; then
     dnl without ngtcp2, nghttp3 is of no use for us
-    AC_MSG_ERROR([nghttp3 enabled without a QUIC library; enable ngtcp2])
+    AC_MSG_ERROR([nghttp3 enabled without a QUIC library; enable ngtcp2 or linux-quic])
   fi
 
   dnl backup the pre-nghttp3 variables
@@ -3659,6 +3695,18 @@ dnl **********************************************************************
 if test "$USE_NGTCP2" = "1" && test "$USE_NGHTTP3" = "1"; then
   USE_NGTCP2_H3=1
   curl_h3_msg="enabled (ngtcp2 + nghttp3)"
+fi
+
+dnl **********************************************************************
+dnl Check for Linux QUIC and nghttp3 (HTTP/3 with nghttp3 using Linux QUIC)
+dnl **********************************************************************
+
+if test "$USE_LINUX_QUIC" = "1" && test "$USE_NGHTTP3" = "1"; then
+  experimental="$experimental HTTP3"
+  AC_DEFINE(USE_LINUX_QUIC_H3, 1, [if linux quic + nghttp3 is in use])
+  AC_SUBST(USE_LINUX_QUIC_H3, [1])
+  AC_MSG_NOTICE([HTTP3 support is experimental])
+  curl_h3_msg="enabled (linuxq + nghttp3)"
 fi
 
 dnl **********************************************************************
@@ -3931,6 +3979,7 @@ AC_CHECK_HEADERS(
   netinet/in6.h \
   sys/un.h \
   linux/tcp.h \
+  linux/quic.h \
   netinet/tcp.h \
   netinet/udp.h \
   netdb.h \
@@ -3978,6 +4027,9 @@ AC_CHECK_HEADERS(
 #endif
 #ifdef HAVE_SYS_UN_H
 #include <sys/un.h>  /* is this really required to detect other headers? */
+#endif
+#ifdef HAVE_LINUX_QUIC_H
+#include <linux/quic.h>
 #endif
 ]
 )
@@ -5187,7 +5239,7 @@ fi
 
 if test "$USE_NGTCP2_H3" = "1" ||
    test "$USE_QUICHE" = "1" ||
-   test "$USE_OPENSSL_H3" = "1"; then
+   test "$USE_LINUX_QUIC_H3" = "1"; then
   if test "$CURL_WITH_MULTI_SSL" = "1"; then
     AC_MSG_ERROR([MultiSSL cannot be enabled with HTTP/3 and vice versa])
   fi

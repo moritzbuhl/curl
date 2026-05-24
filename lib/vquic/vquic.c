@@ -36,6 +36,9 @@
 #ifdef USE_NGHTTP3
 #include <nghttp3/nghttp3.h>
 #endif
+#ifdef USE_LINUX_QUIC
+#include <linux/quic.h>
+#endif
 
 #include "bufq.h"
 #include "curlx/dynbuf.h"
@@ -43,6 +46,7 @@
 #include "cfilters.h"
 #include "vquic/curl_ngtcp2.h"
 #include "vquic/curl_quiche.h"
+#include "vquic/curl_linux.h"
 #include "multiif.h"
 #include "progress.h"
 #include "rand.h"
@@ -70,6 +74,8 @@ void Curl_quic_ver(char *p, size_t len)
   Curl_ngtcp2_ver(p, len);
 #elif defined(USE_QUICHE)
   Curl_quiche_ver(p, len);
+#elif defined(USE_LINUX_QUIC) && defined(USE_NGHTTP3)
+  Curl_linuxq_ver(p, len);
 #endif
 }
 
@@ -393,7 +399,11 @@ static CURLcode recvmmsg_packets(struct Curl_cfilter *cf,
 #define MSG_BUF_SIZE  (UDP_GRO_CNT_MAX * 1500)
   struct iovec msg_iov[MMSG_NUM];
   struct mmsghdr mmsg[MMSG_NUM];
+#ifdef USE_LINUX_QUIC
+  uint8_t msg_ctrl[MMSG_NUM * CMSG_SPACE(sizeof(struct quic_stream_info))];
+#else
   uint8_t msg_ctrl[MMSG_NUM * CMSG_SPACE(sizeof(int))];
+#endif
   struct sockaddr_storage remote_addr[MMSG_NUM];
   size_t total_nread = 0, pkts = 0;
 #ifdef CURLVERBOSE
@@ -425,7 +435,12 @@ static CURLcode recvmmsg_packets(struct Curl_cfilter *cf,
       mmsg[i].msg_hdr.msg_name = &remote_addr[i];
       mmsg[i].msg_hdr.msg_namelen = sizeof(remote_addr[i]);
       mmsg[i].msg_hdr.msg_control = &msg_ctrl[i * CMSG_SPACE(sizeof(int))];
+#ifdef USE_LINUX_QUIC
+      mmsg[i].msg_hdr.msg_controllen = CMSG_SPACE(sizeof(struct
+                                                         quic_stream_info));
+#else
       mmsg[i].msg_hdr.msg_controllen = CMSG_SPACE(sizeof(int));
+#endif
     }
 
     while((mcount = recvmmsg(qctx->sockfd, mmsg, n, 0, NULL)) == -1 &&
@@ -462,9 +477,13 @@ static CURLcode recvmmsg_packets(struct Curl_cfilter *cf,
       if(gso_size == 0)
         gso_size = mmsg[i].msg_len;
 
+#ifdef USE_LINUX_QUIC
+      result = recv_cb(cf, data, &mmsg[i].msg_hdr, mmsg[i].msg_len, userp);
+#else
       result = recv_cb(bufs[i], mmsg[i].msg_len, gso_size,
                        mmsg[i].msg_hdr.msg_name,
                        mmsg[i].msg_hdr.msg_namelen, 0, userp);
+#endif
       if(result)
         goto out;
       pkts += (mmsg[i].msg_len + gso_size - 1) / gso_size;
@@ -495,7 +514,11 @@ static CURLcode recvmsg_packets(struct Curl_cfilter *cf,
   size_t nread;
   char errstr[STRERROR_LEN];
   CURLcode result = CURLE_OK;
+#ifdef USE_LINUX_QUIC
+  uint8_t msg_ctrl[CMSG_SPACE(sizeof(struct quic_stream_info))];
+#else
   uint8_t msg_ctrl[CMSG_SPACE(sizeof(int))];
+#endif
   size_t gso_size;
 
   DEBUGASSERT(max_pkts > 0);
@@ -545,12 +568,16 @@ static CURLcode recvmsg_packets(struct Curl_cfilter *cf,
     if(gso_size == 0)
       gso_size = nread;
 
+#ifdef USE_LINUX_QUIC
+    result = recv_cb(cf, data, &msg, nread, userp);
+#else
     result = recv_cb(buf, nread, gso_size,
                      msg.msg_name, msg.msg_namelen, 0, userp);
+#endif
     if(result)
       goto out;
     pkts += (nread + gso_size - 1) / gso_size;
-  }
+ }
 
 out:
   if(total_nread || result)
@@ -711,6 +738,8 @@ CURLcode Curl_cf_quic_create(struct Curl_cfilter **pcf,
   return Curl_cf_ngtcp2_create(pcf, data, conn, addr);
 #elif defined(USE_QUICHE)
   return Curl_cf_quiche_create(pcf, data, conn, addr);
+#elif defined(USE_LINUX_QUIC) && defined(USE_NGHTTP3)
+  return Curl_cf_linuxq_create(pcf, data, conn, addr);
 #else
   *pcf = NULL;
   (void)data;

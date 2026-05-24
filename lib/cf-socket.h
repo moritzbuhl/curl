@@ -98,6 +98,21 @@ CURLcode Curl_cf_tcp_create(struct Curl_cfilter **pcf,
                             struct Curl_sockaddr_ex *addr,
                             uint8_t transport);
 
+#ifdef USE_LINUX_QUIC
+/**
+ * Creates a cfilter that opens a QUIC socket to the given address
+ * when calling its `connect` implementation.
+ * The filter will not touch any connection/data flags and can be
+ * used in happy eyeballing. Once selected for use, its `_active()`
+ * method needs to be called.
+ */
+CURLcode Curl_cf_quic_sock_create(struct Curl_cfilter **pcf,
+                                  struct Curl_easy *data,
+                                  struct connectdata *conn,
+                                  const struct Curl_addrinfo *ai,
+                                  int transport);
+#endif
+
 /**
  * Creates a cfilter that opens a UDP socket to the given address
  * when calling its `connect` implementation.
